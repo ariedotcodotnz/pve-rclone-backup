@@ -4,7 +4,7 @@ GO        ?= go
 PKG       := github.com/ariedotcodotnz/pve-rclone-backup
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT    ?= $(shell git rev-parse HEAD 2>/dev/null)
-LDFLAGS   := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/internal/version.Commit=$(COMMIT)
+LDFLAGS   := -s -w -X github.com/rclone/rclone/fs.VersionSuffix= -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/internal/version.Commit=$(COMMIT)
 GOFLAGS   ?= -trimpath
 BINDIR    ?= bin
 export CGO_ENABLED ?= 0

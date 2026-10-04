@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/version"
 )
 
@@ -20,6 +21,7 @@ func main() {
 
 	if *showVersion {
 		fmt.Println("pve-rclone-backupd", version.Get())
+		fmt.Println("rclone engine", transport.RcloneVersion())
 		return
 	}
 
