@@ -1,0 +1,25 @@
+version: "2"
+run:
+  tests: true
+  build-tags:
+    - integration
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - gosec
+    - misspell
+    - nolintlint
+    - revive
+    - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G104 # unhandled errors are already reported by errcheck
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+formatters:
+  enable:
+    - gofmt

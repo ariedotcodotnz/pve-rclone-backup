@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+      - name: gofmt
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: go vet
+        run: make vet
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.26.x", "1.27.x"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+      - name: unit tests (race)
+        run: make race
+      - name: integration tests
+        run: make integration
+      - name: build
+        run: make build

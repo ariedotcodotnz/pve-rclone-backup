@@ -1,0 +1,19 @@
+# Build output
+/bin/
+/dist/
+*.test
+*.out
+/coverage.*
+
+# Debian build artefacts
+/debian/.debhelper/
+/debian/pve-rclone-backup/
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper.log
+/*.deb
+/*.buildinfo
+/*.changes
+
+# Nested PVE test harness state
+/test/e2e/.work/
