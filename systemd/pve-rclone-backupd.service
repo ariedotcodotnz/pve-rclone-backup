@@ -1,0 +1,49 @@
+[Unit]
+Description=Proxmox VE offsite backup replication (pve-rclone-backup)
+Documentation=https://github.com/ariedotcodotnz/pve-rclone-backup
+Wants=network-online.target
+# The daemon starts degraded without /etc/pve and recovers once it appears.
+After=network-online.target pve-cluster.service
+
+[Service]
+Type=notify
+ExecStart=/usr/sbin/pve-rclone-backupd
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+WatchdogSec=60s
+TimeoutStopSec=30s
+
+RuntimeDirectory=pve-rclone-backup
+RuntimeDirectoryMode=0700
+StateDirectory=pve-rclone-backup
+StateDirectoryMode=0700
+UMask=0077
+
+# Uploads must not compete with guests or vzdump for CPU and disk; restore
+# processes raise their own I/O priority.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Hardening that does not break the PVE tools the daemon runs (pvesm,
+# qmrestore, pct, vma, zstd, tar). Restores write to arbitrary storage
+# backends and pct needs user namespaces, so ProtectSystem=strict and
+# RestrictNamespaces are deliberately not used.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

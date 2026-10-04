@@ -40,7 +40,7 @@ integration:
 
 # Perl plugin tests run against Proxmox VE's real storage library in a
 # container (needs docker).
-perl-test:
+perl-test: $(BINDIR)/pve-rclone-backupd
 	test/perl/run.sh
 
 fmt:

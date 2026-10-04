@@ -398,3 +398,22 @@ func (s *Store) Segments(ctx context.Context, jobID int64) ([]Segment, error) {
 	}
 	return out, rows.Err()
 }
+
+// JobCounts returns the number of jobs per state.
+func (s *Store) JobCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT state, count(*) FROM jobs GROUP BY state")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			return nil, err
+		}
+		out[state] = n
+	}
+	return out, rows.Err()
+}

@@ -30,6 +30,10 @@ linters:
       - path: internal/store/
         linters: [gosec]
         text: G202
+      # Tests plant fake credentials and convert the test process uid.
+      - path: _test\.go
+        linters: [gosec]
+        text: "G101|G115"
 formatters:
   enable:
     - gofmt
