@@ -135,7 +135,7 @@ func (r *Runner) command(ctx context.Context, t *jobs.Task, stdin io.Reader, arg
 	cmd.Stderr = cmd.Stdout
 	logs := &logLines{t: t, name: argv[len(r.opts.Tools.IOnice)]}
 	_ = t.Event(ctx, "info", "running "+strings.Join(argv, " "))
-	if err := cmd.Start(); err != nil {
+	if err := startWithUmask(cmd, toolUmask); err != nil {
 		return fmt.Errorf("restore: start %s: %w", argv[0], err)
 	}
 	done := make(chan struct{})
