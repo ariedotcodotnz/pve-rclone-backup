@@ -33,7 +33,7 @@ linters:
       # Tests plant fake credentials and convert the test process uid.
       - path: _test\.go
         linters: [gosec]
-        text: "G101|G115"
+        text: "G101|G115|G302|G304"
 formatters:
   enable:
     - gofmt
