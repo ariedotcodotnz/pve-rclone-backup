@@ -5,7 +5,6 @@ package restore
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -214,5 +213,9 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// errIsCancel reports a cancelled or stopped job.
-func errIsCancel(err error) bool { return errors.Is(err, context.Canceled) }
+type stringsBuilder = strings.Builder
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
+}

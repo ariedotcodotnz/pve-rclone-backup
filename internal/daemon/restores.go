@@ -37,6 +37,8 @@ func (d *Daemon) schedulerFor(kind string) *jobs.Scheduler {
 		return d.fetches
 	case "restore":
 		return d.restores
+	case "verify":
+		return d.verifies
 	}
 	return d.scheduler
 }

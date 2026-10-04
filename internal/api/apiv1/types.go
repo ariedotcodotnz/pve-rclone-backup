@@ -478,3 +478,23 @@ type RestoreRequest struct {
 	Force         bool   `json:"force,omitzero"`
 	AllowDamaged  bool   `json:"allow_damaged,omitzero"`
 }
+
+// VerifyRequest verifies an offsite backup: level 2 rechecks presence,
+// sizes and provider hashes of the storage's backups, level 3 downloads
+// and checks the content, level 4 restores into a scratch guest.
+type VerifyRequest struct {
+	Level          int    `json:"level"`
+	ScratchVMID    int    `json:"scratch_vmid,omitzero"`
+	ScratchStorage string `json:"scratch_storage,omitempty"`
+}
+
+// Verification is a verification run.
+type Verification struct {
+	Storage    string          `json:"storage"`
+	Volname    string          `json:"volname"`
+	Level      int             `json:"level"`
+	StartedAt  time.Time       `json:"started_at"`
+	FinishedAt *time.Time      `json:"finished_at,omitempty"`
+	Result     string          `json:"result,omitempty"` // ok | failed | damaged | error
+	Details    json.RawMessage `json:"details,omitempty"`
+}

@@ -49,7 +49,10 @@ type Options struct {
 	StagingDir     string
 	StagingReserve int64
 	Tools          Tools
-	Now            func() time.Time
+	// OnDamaged is called when a content verification finds a backup
+	// damaged.
+	OnDamaged func(storeID, volname, problem string)
+	Now       func() time.Time
 }
 
 // Runner implements jobs.Runner for fetch and restore jobs.
@@ -154,6 +157,12 @@ func (r *Runner) Run(ctx context.Context, t *jobs.Task) error {
 			return jobs.Permanent(errors.New("the backup is damaged; restore an older backup or pass allow_damaged"))
 		}
 		return r.restore(ctx, t, src, p)
+	case "verify":
+		var p VerifyParams
+		if err := json.Unmarshal([]byte(j.ParamsJSON), &p); err != nil {
+			return jobs.Permanent(err)
+		}
+		return r.verify(ctx, t, src, p)
 	}
 	return jobs.Permanent(fmt.Errorf("unsupported job kind %q", j.Kind))
 }

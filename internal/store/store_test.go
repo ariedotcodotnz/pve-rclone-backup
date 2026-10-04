@@ -460,6 +460,24 @@ func TestMiscTables(t *testing.T) {
 	}
 }
 
+func TestDamageOverridesEarlierVerification(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	_ = s.PutStorage(ctx, &StorageRow{StoreID: "offsite", Remote: "od", BasePath: "p", Source: "lab", ConfigHash: "h"})
+	b := testBackup("b/1", 100, "s1")
+	at := int64(1)
+	b.VerifyLevel, b.VerifiedAt, b.VerifyResult = 3, &at, "ok"
+	_ = s.PutBackup(ctx, b)
+	damaged := testBackup("b/1", 100, "s1")
+	damaged.State, damaged.VerifyResult = "damaged", "damaged"
+	if err := s.ReplaceCatalog(ctx, "offsite", []*Backup{damaged}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetBackup(ctx, "offsite", "b/1"); got.VerifyLevel != 0 || got.VerifyResult != "damaged" {
+		t.Fatalf("damaged entry kept its old verification: %+v", got)
+	}
+}
+
 func TestPendingMetaChanges(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
@@ -516,5 +534,45 @@ func TestPendingMetaChanges(t *testing.T) {
 	}
 	if got, _ := s.GetBackup(ctx, "offsite", "b/1"); got.Notes == "newer" || got.State != "complete" {
 		t.Fatalf("after pushed resync = %+v", got)
+	}
+}
+
+func TestVerificationBookkeeping(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	clock := time.Unix(1790000000, 0)
+	s.now = func() time.Time { return clock }
+	_ = s.PutStorage(ctx, &StorageRow{StoreID: "offsite", Remote: "od", BasePath: "p", Source: "lab", ConfigHash: "h"})
+	for i, vol := range []string{"b/1", "b/2", "b/3"} {
+		b := testBackup(vol, 100+i, fmt.Sprintf("s%d", i))
+		b.ArchiveSize = int64(10 * (i + 1))
+		_ = s.PutBackup(ctx, b)
+	}
+	if err := s.SetVerification(ctx, "offsite", "b/1", 3, "ok", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetVerification(ctx, "offsite", "missing", 3, "ok", false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing entry: %v", err)
+	}
+	cands, err := s.VerifyCandidates(ctx, "offsite", clock.Add(-time.Hour).Unix(), 10)
+	if err != nil || len(cands) != 2 {
+		t.Fatalf("candidates = %+v, %v", cands, err)
+	}
+	// After the interval, verified backups are due again (last).
+	cands, _ = s.VerifyCandidates(ctx, "offsite", clock.Add(time.Hour).Unix(), 10)
+	if len(cands) != 3 || cands[2].Volname != "b/1" {
+		t.Fatalf("candidates after interval = %v", cands)
+	}
+	if err := s.SetVerification(ctx, "offsite", "b/2", 3, "damaged", true); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := s.GetBackup(ctx, "offsite", "b/2"); b.State != "damaged" || b.VerifyLevel != 0 {
+		t.Fatalf("damaged entry = %+v", b)
+	}
+	_, _ = s.AddVerification(ctx, &Verification{StoreID: "offsite", Volname: "b/1", Level: 3, StartedAt: clock.Unix()})
+	_, _ = s.AddVerification(ctx, &Verification{StoreID: "offsite", Volname: "b/3", Level: 3, StartedAt: clock.Unix() - 100000})
+	_, _ = s.AddVerification(ctx, &Verification{StoreID: "offsite", Volname: "b/3", Level: 2, StartedAt: clock.Unix()})
+	if n, err := s.ContentVerifiedBytes(ctx, "offsite", clock.Add(-24*time.Hour).Unix()); err != nil || n != 10 {
+		t.Fatalf("verified bytes = %d, %v", n, err)
 	}
 }

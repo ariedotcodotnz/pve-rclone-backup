@@ -5,6 +5,7 @@
 package restore
 
 import (
+	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -43,6 +44,7 @@ func TestMain(m *testing.M) {
 type env struct {
 	t             *testing.T
 	failQMRestore bool
+	damaged       []string
 	rp            *repo.Repo
 	st            *store.Store
 	pveDir        string
@@ -127,9 +129,10 @@ func (e *env) run(kind, volname string, params any) *store.Job {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	runner := New(Options{Log: log, Store: e.st, Node: "pve1", PVEDir: e.pveDir, StagingDir: e.staging,
-		Repos:   func(string) (*repo.Repo, *config.Storage, error) { return e.rp, &config.Storage{ID: "offsite"}, nil },
-		Mounted: func(string) bool { return false },
-		Tools:   Tools{QMRestore: e.fakeTool("qmrestore", 1, e.failQMRestore), PCT: e.fakeTool("pct", 3, false), QM: e.fakeTool("qm", 0, false)}})
+		Repos:     func(string) (*repo.Repo, *config.Storage, error) { return e.rp, &config.Storage{ID: "offsite"}, nil },
+		Mounted:   func(string) bool { return false },
+		OnDamaged: func(s, v, _ string) { e.damaged = append(e.damaged, s+":"+v) },
+		Tools:     Tools{QMRestore: e.fakeTool("qmrestore", 1, e.failQMRestore), PCT: e.fakeTool("pct", 3, false), QM: e.fakeTool("qm", 0, false)}})
 	s := jobs.New(jobs.Options{Log: log, Store: e.st, Node: "pve1", Kind: kind, Workers: 1, Runner: runner, Poll: 20 * time.Millisecond,
 		Targets: func() []*config.Storage { return []*config.Storage{{ID: "offsite", Remote: "r", Transfers: 1}} }})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -336,5 +339,79 @@ func TestStagedRestore(t *testing.T) {
 	}
 	if j := e.run("restore", dmg.ID().Volname("tar.zst"), RestoreParams{Mode: "stage", TargetVMID: 302}); j.State != jobs.StateFailed || !strings.Contains(j.LastError, "damaged") {
 		t.Fatalf("restore of a damaged backup = %+v", j)
+	}
+}
+
+// ctTarGz builds a small container archive.
+func ctTarGz(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	for name, body := range map[string]string{"./etc/vzdump/pct.conf": "hostname: ct\n", "./etc/hostname": "ct\n"} {
+		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body)), ModTime: time.Unix(0, 0)})
+		_, _ = tw.Write([]byte(body))
+	}
+	_ = tw.Close()
+	_ = gw.Close()
+	return buf.Bytes()
+}
+
+func TestVerification(t *testing.T) {
+	e := newEnv(t)
+	ct := repotest.Backup{VMID: 200, VMType: "lxc", Content: ctTarGz(t), Ext: "tar.gz"}
+	e.write(ct)
+	vol := ct.ID().Volname("tar.gz")
+	j := e.run("verify", vol, VerifyParams{Level: LevelContent})
+	if j.State != jobs.StateComplete {
+		t.Fatalf("content verification = %+v", j)
+	}
+	b, _ := e.st.GetBackup(t.Context(), "offsite", vol)
+	if b.VerifyLevel != 3 || b.VerifyResult != "ok" {
+		t.Fatalf("catalogue after verification = %+v", b)
+	}
+	hist, _ := e.st.Verifications(t.Context(), "offsite", vol, 10)
+	if len(hist) != 1 || hist[0].Result != "ok" || !strings.Contains(hist[0].DetailsJSON, `"structural":"tar"`) {
+		t.Fatalf("history = %+v", hist)
+	}
+
+	// A structurally broken archive with matching digests fails without
+	// being marked damaged.
+	broken := repotest.Backup{VMID: 201, VMType: "lxc", Content: []byte("not a tar archive at all"), Ext: "tar"}
+	e.write(broken)
+	j = e.run("verify", broken.ID().Volname("tar"), VerifyParams{Level: LevelContent})
+	if j.State != jobs.StateFailed || !strings.Contains(j.LastError, "structure") {
+		t.Fatalf("broken archive = %+v", j)
+	}
+	if b, _ := e.st.GetBackup(t.Context(), "offsite", broken.ID().Volname("tar")); b.State != "complete" {
+		t.Fatalf("broken archive marked %s", b.State)
+	}
+
+	// Tampered content is damage.
+	vm := repotest.Backup{VMID: 100, Size: 100 << 10, SegmentSize: 32 << 10}
+	e.write(vm)
+	tgt, _ := e.rp.Target(1)
+	_, _ = tgt.PutBytes(t.Context(), vm.ID().Path(layout.PartName(2)), bytes.Repeat([]byte{1}, 32<<10))
+	j = e.run("verify", vm.ID().Volname("vma.zst"), VerifyParams{Level: LevelContent})
+	if j.State != jobs.StateFailed || !strings.Contains(j.LastError, "segment 2") {
+		t.Fatalf("tampered backup = %+v", j)
+	}
+	if b, _ := e.st.GetBackup(t.Context(), "offsite", vm.ID().Volname("vma.zst")); b.State != "damaged" || b.VerifyResult != "damaged" {
+		t.Fatalf("tampered backup in catalogue = %+v", b)
+	}
+	if len(e.damaged) != 1 || e.damaged[0] != "offsite:"+vm.ID().Volname("vma.zst") {
+		t.Fatalf("damage reported = %v", e.damaged)
+	}
+
+	// Restore test: restore into a scratch guest, then remove it.
+	j = e.run("verify", vol, VerifyParams{Level: LevelRestore, ScratchVMID: 990, ScratchStorage: "local-lvm"})
+	if j.State != jobs.StateComplete {
+		t.Fatalf("restore test = %+v", j)
+	}
+	if !strings.HasPrefix(e.toolLog("pct"), "restore 990 ") || !strings.Contains(e.toolLog("pct"), "destroy 990 --purge 1") {
+		t.Fatalf("pct = %q", e.toolLog("pct"))
+	}
+	if b, _ := e.st.GetBackup(t.Context(), "offsite", vol); b.VerifyLevel != 4 {
+		t.Fatalf("level after restore test = %d", b.VerifyLevel)
 	}
 }

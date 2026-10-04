@@ -20,6 +20,7 @@ import (
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/catalog"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/config"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/discovery"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
@@ -87,6 +88,7 @@ type Daemon struct {
 	scheduler  *jobs.Scheduler
 	fetches    *jobs.Scheduler
 	restores   *jobs.Scheduler
+	verifies   *jobs.Scheduler
 	remotes    *remotes.Manager
 	keyStore   KeyStore
 	ledger     *recoverykit.Ledger
@@ -158,6 +160,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.storages = storages.New(storages.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Keys: opts.Keys,
 		AboutInterval: dcfg.AboutInterval, ResyncInterval: dcfg.CatalogResyncInterval,
+		OnResync: func(id string, rep *catalog.Report) { d.damagedAlert(context.Background(), id, rep) },
 		OnChange: func(id string) {
 			if s, ok := d.storages.Get(id); ok {
 				d.api.Events().Publish("storage.status", s)
@@ -201,10 +204,10 @@ func Run(ctx context.Context, opts Options) error {
 	restorer := restore.New(restore.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Repos: d.storages.Repo,
 		StagingDir: ncfg.StagingDir, StagingReserve: ncfg.StagingReserve,
-		Tools: d.restoreTools(ncfg),
+		Tools: d.restoreTools(ncfg), OnDamaged: d.contentDamaged,
 	})
 	restorer.CleanStaging()
-	for kind, sched := range map[string]**jobs.Scheduler{"fetch": &d.fetches, "restore": &d.restores} {
+	for kind, sched := range map[string]**jobs.Scheduler{"fetch": &d.fetches, "restore": &d.restores, "verify": &d.verifies} {
 		*sched = jobs.New(jobs.Options{
 			Log: d.log, Store: st, Node: opts.Node, Kind: kind, Workers: 1, Targets: d.storages.Targets, Runner: restorer,
 			Ready: func(id string) error {
@@ -225,6 +228,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.setupRoutes()
 	d.backupRoutes()
 	d.restoreRoutes()
+	d.verifyRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
@@ -247,6 +251,8 @@ func Run(ctx context.Context, opts Options) error {
 	workers.Go(func() { d.scheduler.Run(serveCtx) })
 	workers.Go(func() { d.fetches.Run(serveCtx) })
 	workers.Go(func() { d.restores.Run(serveCtx) })
+	workers.Go(func() { d.verifies.Run(serveCtx) })
+	workers.Go(func() { d.planVerification(serveCtx) })
 	workers.Go(func() { d.pushMeta(serveCtx) })
 
 	if opts.Ready != nil {

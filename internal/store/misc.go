@@ -182,3 +182,54 @@ func (s *Store) ActiveAlerts(ctx context.Context) ([]Alert, error) {
 	}
 	return out, rows.Err()
 }
+
+// SetVerification records a verification result on a catalogue entry. A
+// damaged result also marks a complete backup as damaged.
+func (s *Store) SetVerification(ctx context.Context, storeID, volname string, level int, result string, damaged bool) error {
+	q := "UPDATE backups SET verify_level = ?, verified_at = ?, verify_result = ? WHERE storeid = ? AND volname = ?"
+	args := []any{level, s.unix(), result, storeID, volname}
+	if damaged {
+		q = "UPDATE backups SET verify_level = 0, verified_at = ?, verify_result = ?, state = CASE WHEN state = 'complete' THEN 'damaged' ELSE state END WHERE storeid = ? AND volname = ?"
+		args = []any{s.unix(), result, storeID, volname}
+	}
+	res, err := s.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ContentVerifiedBytes sums the archive sizes of content verifications
+// (level 3 and up) of a storage started since a time.
+func (s *Store) ContentVerifiedBytes(ctx context.Context, storeID string, since int64) (int64, error) {
+	var n sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT SUM(b.archive_size) FROM verifications v
+		JOIN backups b ON b.storeid = v.storeid AND b.volname = v.volname
+		WHERE v.storeid = ? AND v.level >= 3 AND v.started_at >= ?`, storeID, since).Scan(&n)
+	return n.Int64, err
+}
+
+// VerifyCandidates returns complete backups whose content was never
+// verified or not since before, never-verified first, then oldest.
+func (s *Store) VerifyCandidates(ctx context.Context, storeID string, before int64, limit int) ([]*Backup, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups WHERE storeid = ? AND state = 'complete'
+		AND (verify_level < 3 OR verified_at IS NULL OR verified_at < ?)
+		ORDER BY CASE WHEN verify_level < 3 THEN 0 ELSE 1 END, COALESCE(verified_at, 0), backup_time DESC LIMIT ?`,
+		storeID, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*Backup
+	for rows.Next() {
+		b, err := scanBackup(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}

@@ -53,6 +53,8 @@ type Options struct {
 	Tick time.Duration
 	// OnChange is called after a storage's state changed.
 	OnChange func(id string)
+	// OnResync is called after each catalogue resync.
+	OnResync func(id string, rep *catalog.Report)
 	Now      func() time.Time
 }
 
@@ -333,7 +335,7 @@ func (m *Manager) schedule(ctx context.Context) {
 		case now.Before(e.nextAttempt):
 		case e.repo == nil:
 			job = m.open
-		case e.resyncWanted || now.Sub(e.lastResync) >= m.opts.ResyncInterval:
+		case e.resyncWanted || now.Sub(e.lastResync) >= m.resyncInterval(e):
 			job = m.resync
 		case !now.Before(e.nextAbout):
 			job = m.about
@@ -349,6 +351,17 @@ func (m *Manager) schedule(ctx context.Context) {
 			m.mu.Unlock()
 		})
 	}
+}
+
+// resyncInterval is how often a storage's catalogue is rebuilt. A resync
+// checks every backup's presence, sizes and provider hashes, so it also
+// runs at the storage's rclone-verify-interval.
+func (m *Manager) resyncInterval(e *entry) time.Duration {
+	iv := m.opts.ResyncInterval
+	if e.cfg != nil && e.cfg.VerifyInterval > 0 && e.cfg.VerifyInterval < iv {
+		iv = e.cfg.VerifyInterval
+	}
+	return iv
 }
 
 // backoff returns the delay before the next attempt after n failures.
@@ -463,6 +476,9 @@ func (m *Manager) resync(ctx context.Context, e *entry) {
 	}
 	m.log.Info("catalogue resynced", "storage", e.id, "complete", rep.Complete, "tombstoned", rep.Tombstoned,
 		"damaged", rep.Damaged, "incomplete", rep.Incomplete, "deleting", rep.Deleting, "invalid", rep.Invalid)
+	if m.opts.OnResync != nil {
+		m.opts.OnResync(e.id, rep)
+	}
 	m.mu.Lock()
 	e.lastResync, e.resyncWanted = m.opts.Now(), false
 	e.failures, e.nextAttempt = 0, time.Time{}
