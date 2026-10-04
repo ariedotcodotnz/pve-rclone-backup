@@ -37,13 +37,17 @@ func NewTarget(ctx context.Context, remote string) (*Target, error) {
 		}
 		return nil, fmt.Errorf("transport: open remote %q: %w", remote, err)
 	}
+	return targetFromFs(f), nil
+}
+
+func targetFromFs(f fs.Fs) *Target {
 	t := &Target{f: f, base: f}
 	if c, ok := f.(*crypt.Fs); ok {
 		t.crypt = c
 		t.base = c.UnWrap()
 	}
 	t.baseHash = t.base.Hashes().GetOne()
-	return t, nil
+	return t
 }
 
 // Encrypted reports whether objects are encrypted with rclone crypt.

@@ -2,9 +2,11 @@
 
 //go:build integration
 
-package secrets
+package secrets_test
 
 import (
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/rclone/rclone/fs/rc"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport"
 )
 
@@ -22,11 +25,11 @@ import (
 func TestRcloneUsesRemoteStore(t *testing.T) {
 	dir := t.TempDir()
 	lock := &cfs.Locker{Dir: filepath.Join(dir, "lock"), AcquireTimeout: 10 * time.Second}
-	path := RemotesPath(dir)
+	path := secrets.RemotesPath(dir)
 	if err := os.WriteFile(path, []byte("[existing]\ntype = local\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := NewRemoteStore(path, lock, quiet())
+	store := secrets.NewRemoteStore(path, lock, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := transport.Init(transport.Options{ConfigPath: path, Storage: store}); err != nil {
 		t.Fatal(err)
 	}

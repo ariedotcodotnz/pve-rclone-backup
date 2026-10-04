@@ -124,6 +124,7 @@ func TestCryptStoredSizeMatchesRclone(t *testing.T) {
 		"password":            obscure.MustObscure("correct horse battery staple"),
 		"filename_encryption": "standard",
 		"filename_encoding":   "base32",
+		"suffix":              ".bin",
 	})
 	if err != nil {
 		t.Fatal(err)

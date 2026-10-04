@@ -3,9 +3,11 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/rclone/rclone/fs"
@@ -29,6 +31,17 @@ type Options struct {
 	// LowLevelRetries bounds rclone's per-request retries. Zero keeps the
 	// rclone default.
 	LowLevelRetries int
+
+	// Logger receives rclone's log output (nil keeps rclone's default). It
+	// should be the daemon's redacting handler.
+	Logger slog.Handler
+
+	// Debug enables rclone's debug logging.
+	Debug bool
+
+	// UserAgent identifies requests to providers (default
+	// "pve-rclone-backup rclone/<version>").
+	UserAgent string
 }
 
 var (
@@ -62,6 +75,15 @@ func Init(opts Options) error {
 	if opts.LowLevelRetries > 0 {
 		ci.LowLevelRetries = opts.LowLevelRetries
 	}
+	if opts.Logger != nil {
+		fs.SetLogger(opts.Logger)
+	}
+	ci.LogLevel = fs.LogLevelNotice
+	if opts.Debug {
+		ci.LogLevel = fs.LogLevelDebug
+	}
+	// Microsoft recommends identifying traffic to reduce throttling.
+	ci.UserAgent = cmp.Or(opts.UserAgent, "pve-rclone-backup rclone/"+fs.Version)
 	// Segments are uploaded as single streams; resumption happens at segment
 	// granularity in our own job state, not inside rclone.
 	ci.MultiThreadStreams = 0

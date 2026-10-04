@@ -24,6 +24,8 @@ type Segment struct {
 	Offset  int64
 	Size    int64
 	ModTime time.Time
+	// Limiter, if set, limits how fast the segment is read.
+	Limiter *Limiter
 }
 
 func (s Segment) validate() error {
@@ -108,7 +110,7 @@ func (o *segmentObject) Update(context.Context, io.Reader, fs.ObjectInfo, ...fs.
 
 // Open returns a reader over the segment, honouring rclone range and seek
 // options. Only a full read from offset zero is hashed.
-func (o *segmentObject) Open(_ context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
+func (o *segmentObject) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
 	offset, limit := int64(0), int64(-1)
 	for _, option := range options {
 		switch x := option.(type) {
@@ -127,7 +129,10 @@ func (o *segmentObject) Open(_ context.Context, options ...fs.OpenOption) (io.Re
 	if limit >= 0 {
 		n = min(n, limit)
 	}
-	section := io.NewSectionReader(o.seg.Source, o.seg.Offset+offset, n)
+	var section io.Reader = io.NewSectionReader(o.seg.Source, o.seg.Offset+offset, n)
+	if o.seg.Limiter != nil {
+		section = &limitedReader{ctx: ctx, r: section, l: o.seg.Limiter}
+	}
 	if offset != 0 || n != o.seg.Size {
 		return io.NopCloser(section), nil
 	}
