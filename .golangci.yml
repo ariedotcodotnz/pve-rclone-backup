@@ -13,6 +13,12 @@ linters:
     - revive
     - unconvert
   settings:
+    errcheck:
+      # Failing to write CLI output to a closed terminal is not actionable.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
     gosec:
       excludes:
         - G104 # unhandled errors are already reported by errcheck

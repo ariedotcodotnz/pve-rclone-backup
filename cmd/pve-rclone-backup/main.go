@@ -1,26 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command pve-rclone-backup is the administration CLI and TUI for
+// Command pve-rclone-backup is the administration CLI for
 // pve-rclone-backupd. It is a thin client of the daemon API.
 package main
 
 import (
-	"flag"
-	"fmt"
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/ariedotcodotnz/pve-rclone-backup/internal/version"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/cli"
 )
 
 func main() {
-	showVersion := flag.Bool("version", false, "print version information and exit")
-	flag.Parse()
-
-	if *showVersion || flag.Arg(0) == "version" {
-		fmt.Println("pve-rclone-backup", version.Get())
-		return
-	}
-
-	fmt.Fprintln(os.Stderr, "pve-rclone-backup: commands not implemented yet (see docs/adr/0001-architecture.md)")
-	os.Exit(2)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := cli.New().Run(ctx, os.Args[1:])
+	stop()
+	os.Exit(code)
 }
