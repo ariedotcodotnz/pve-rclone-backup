@@ -20,6 +20,12 @@ linters:
       rules:
         - name: exported
           disabled: true
+  exclusions:
+    rules:
+      # Build-time tools read and write repository files by design.
+      - path: cmd/schemagen/
+        linters: [gosec]
+        text: "G304|G306"
 formatters:
   enable:
     - gofmt

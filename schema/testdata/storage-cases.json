@@ -1,0 +1,161 @@
+{
+  "comment": "Property values that must be accepted or rejected identically by PVE (perl/t/05-config.t) and the daemon (internal/config). pve_lenient lists values PVE accepts with only a warning (dropping them) that the daemon rejects, because it refuses to act on configuration it does not fully understand.",
+  "minimal": {
+    "rclone-remote": "od",
+    "rclone-source": "homelab"
+  },
+  "accept": [
+    [
+      "rclone-path",
+      "pve/backups-2"
+    ],
+    [
+      "rclone-tags",
+      "offsite;critical"
+    ],
+    [
+      "rclone-vmids",
+      "100,101,200"
+    ],
+    [
+      "rclone-exclude-vmids",
+      "100 101;102"
+    ],
+    [
+      "rclone-replicate-from",
+      "local,nas-backup"
+    ],
+    [
+      "rclone-min-interval",
+      "0"
+    ],
+    [
+      "rclone-min-interval",
+      "7d"
+    ],
+    [
+      "rclone-verify-content",
+      "off"
+    ],
+    [
+      "rclone-verify-content",
+      "30d"
+    ],
+    [
+      "rclone-bwlimit",
+      "08:00,1M 23:00,off"
+    ],
+    [
+      "rclone-transfers",
+      "8"
+    ],
+    [
+      "rclone-supersede",
+      "0"
+    ],
+    [
+      "rclone-immutable",
+      "1"
+    ],
+    [
+      "rclone-segment-size",
+      "1G"
+    ],
+    [
+      "rclone-encryption",
+      "none"
+    ],
+    [
+      "prune-backups",
+      "keep-daily=7,keep-weekly=4"
+    ],
+    [
+      "content",
+      "backup"
+    ]
+  ],
+  "reject": [
+    [
+      "rclone-transfers",
+      "99"
+    ],
+    [
+      "rclone-transfers",
+      "0"
+    ],
+    [
+      "rclone-transfers",
+      "two"
+    ],
+    [
+      "rclone-remote",
+      "Bad Name"
+    ],
+    [
+      "rclone-source",
+      "-bad"
+    ],
+    [
+      "rclone-path",
+      "../escape"
+    ],
+    [
+      "rclone-path",
+      "/absolute"
+    ],
+    [
+      "rclone-encryption",
+      "aes"
+    ],
+    [
+      "rclone-min-interval",
+      "7 days"
+    ],
+    [
+      "rclone-segment-size",
+      "1GiB"
+    ],
+    [
+      "rclone-tags",
+      "bad tag!"
+    ],
+    [
+      "rclone-vmids",
+      "abc"
+    ],
+    [
+      "rclone-vmids",
+      "99"
+    ],
+    [
+      "rclone-replicate-from",
+      "bad storage!"
+    ],
+    [
+      "rclone-verify-content",
+      "sometimes"
+    ],
+    [
+      "rclone-supersede",
+      "yes"
+    ],
+    [
+      "rclone-immutable",
+      "true"
+    ],
+    [
+      "prune-backups",
+      "keep-all=1,keep-last=2"
+    ],
+    [
+      "prune-backups",
+      "keep-bogus=1"
+    ]
+  ],
+  "pve_lenient": [
+    [
+      "content",
+      "images"
+    ]
+  ]
+}

@@ -17,4 +17,5 @@ exec docker run --rm \
     -v "$root/perl/PVE/Storage/Custom:/usr/share/perl5/PVE/Storage/Custom:ro" \
     -v "$root/perl/PVE/BackupProvider/Plugin/Rclone.pm:/usr/share/perl5/PVE/BackupProvider/Plugin/Rclone.pm:ro" \
     -v "$root/perl/t:/src/t:ro" \
+    -v "$root/schema/testdata:/src/schema/testdata:ro" \
     "$image" prove -T -r "$@" /src/t

@@ -4,6 +4,7 @@
 use v5.36;
 
 use FindBin;
+use JSON ();
 use Test::More;
 
 use PVE::Storage;
@@ -47,35 +48,18 @@ my $opts = check({});
 ok($opts, 'minimal config accepted') or diag(error_keys());
 is($opts->{shared}, 1, 'shared forced on create');
 
-for my $case (
-    ['rclone-transfers', 99],
-    ['rclone-transfers', 0],
-    ['rclone-remote', 'Bad Name'],
-    ['rclone-source', '-bad'],
-    ['rclone-path', '../escape'],
-    ['rclone-path', '/absolute'],
-    ['rclone-encryption', 'aes'],
-    ['rclone-min-interval', '7 days'],
-    ['rclone-segment-size', '1GiB'],
-    ['rclone-tags', 'bad tag!'],
-    ['rclone-vmids', 'abc'],
-    ['rclone-replicate-from', 'bad storage!'],
-    ['rclone-verify-content', 'sometimes'],
-) {
+# Shared with the daemon's Go tests (internal/config) so both sides validate
+# identically.
+my $cases = do {
+    open(my $cfh, '<', '/src/schema/testdata/storage-cases.json') or die "storage-cases.json: $!";
+    local $/;
+    JSON::decode_json(<$cfh>);
+};
+for my $case ($cases->{reject}->@*) {
     my ($key, $value) = @$case;
     ok(!check({ $key => $value }), "rejects $key=$value");
 }
-
-for my $case (
-    ['rclone-path', 'pve/backups-2'],
-    ['rclone-tags', 'offsite;critical'],
-    ['rclone-vmids', '100,101,200'],
-    ['rclone-replicate-from', 'local,nas-backup'],
-    ['rclone-min-interval', '0'],
-    ['rclone-verify-content', 'off'],
-    ['rclone-bwlimit', '08:00,1M 23:00,off'],
-    ['prune-backups', 'keep-daily=7,keep-weekly=4'],
-) {
+for my $case (($cases->{accept} // [])->@*, ($cases->{pve_lenient} // [])->@*) {
     my ($key, $value) = @$case;
     ok(check({ $key => $value }), "accepts $key=$value") or diag(error_keys());
 }

@@ -1,0 +1,58 @@
+{
+  "$id": "https://github.com/ariedotcodotnz/pve-rclone-backup/schema/node",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "inotify": {
+      "default": true,
+      "description": "Watch source storages for finished archives.",
+      "title": "Inotify",
+      "type": "boolean"
+    },
+    "restore-ionice": {
+      "default": "best-effort:4",
+      "description": "I/O scheduling class used for restore processes.",
+      "enum": [
+        "best-effort:0",
+        "best-effort:4",
+        "best-effort:7",
+        "idle"
+      ],
+      "title": "Restore I/O Priority",
+      "type": "string"
+    },
+    "scan-interval": {
+      "default": "15m",
+      "description": "Interval of reconcile scans of source storages for missed archives.",
+      "pattern": "^(?:0|\\d+[smhdw])$",
+      "title": "Scan Interval",
+      "type": "string",
+      "x-format": "duration"
+    },
+    "staging-dir": {
+      "default": "/var/lib/pve-rclone-backup/staging",
+      "description": "Directory for restore and fetch staging on this node.",
+      "maxLength": 255,
+      "pattern": "^(?:/[^\\s]*)$",
+      "title": "Staging Directory",
+      "type": "string"
+    },
+    "staging-reserve": {
+      "default": "10G",
+      "description": "Free space that staging must always leave on its filesystem.",
+      "pattern": "^(?:\\d+[KMGT]?)$",
+      "title": "Staging Reserve",
+      "type": "string",
+      "x-format": "size"
+    },
+    "upload-workers": {
+      "default": 2,
+      "description": "Maximum concurrent uploads on this node across all storages.",
+      "maximum": 16,
+      "minimum": 1,
+      "title": "Upload Workers",
+      "type": "integer"
+    }
+  },
+  "title": "NodeConfig",
+  "type": "object"
+}

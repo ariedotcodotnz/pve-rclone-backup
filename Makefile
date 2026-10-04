@@ -11,7 +11,7 @@ export CGO_ENABLED ?= 0
 
 BINARIES := pve-rclone-backupd pve-rclone-backup
 
-.PHONY: all build test race integration perl-test lint fmt vet clean
+.PHONY: all build generate test race integration perl-test lint fmt vet clean
 
 all: build
 
@@ -21,6 +21,10 @@ $(BINDIR)/%: FORCE
 	$(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $@ ./cmd/$*
 
 FORCE:
+
+# Regenerate configuration code from schema/*.yaml.
+generate:
+	$(GO) run ./cmd/schemagen -root .
 
 test:
 	$(GO) test ./...
@@ -47,6 +51,7 @@ vet:
 	$(GO) vet -tags integration ./...
 
 lint: vet
+	$(GO) run ./cmd/schemagen -root . -check
 	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./...; \

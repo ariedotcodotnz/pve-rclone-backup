@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Cluster-wide daemon settings: /etc/pve/pve-rclone-backup/daemon.cfg
+# (PVE-style "key: value" lines). Generated into internal/config.
+
+go_type: DaemonConfig
+file: /etc/pve/pve-rclone-backup/daemon.cfg
+
+properties:
+  - key: log-level
+    field: LogLevel
+    type: enum
+    values: [debug, info, warn, error]
+    title: Log Level
+    description: Daemon log level.
+    default: info
+
+  - key: about-interval
+    field: AboutInterval
+    type: duration
+    title: Quota Refresh Interval
+    description: How often remote quota is refreshed.
+    default: 15m
+
+  - key: health-interval
+    field: HealthInterval
+    type: duration
+    title: Health Check Interval
+    description: How often remote connectivity is checked.
+    default: 5m
+
+  - key: catalog-resync-interval
+    field: CatalogResyncInterval
+    type: duration
+    title: Catalogue Resync Interval
+    description: How often the catalogue is rebuilt from remote manifests.
+    default: 6h
+
+  - key: retention-time
+    field: RetentionTime
+    type: string
+    pattern: '(?:[01][0-9]|2[0-3]):[0-5][0-9]'
+    title: Retention Time
+    description: Local time of day at which scheduled retention runs.
+    default: '05:00'

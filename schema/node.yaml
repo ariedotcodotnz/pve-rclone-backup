@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Per-node daemon settings: /etc/pve/nodes/<node>/pve-rclone-backup.cfg
+# (PVE-style "key: value" lines). Generated into internal/config.
+
+go_type: NodeConfig
+file: /etc/pve/nodes/{node}/pve-rclone-backup.cfg
+
+properties:
+  - key: staging-dir
+    field: StagingDir
+    type: string
+    pattern: '/[^\s]*'
+    max_length: 255
+    title: Staging Directory
+    description: Directory for restore and fetch staging on this node.
+    default: /var/lib/pve-rclone-backup/staging
+
+  - key: staging-reserve
+    field: StagingReserve
+    type: size
+    title: Staging Reserve
+    description: Free space that staging must always leave on its filesystem.
+    default: 10G
+
+  - key: upload-workers
+    field: UploadWorkers
+    type: integer
+    minimum: 1
+    maximum: 16
+    title: Upload Workers
+    description: Maximum concurrent uploads on this node across all storages.
+    default: 2
+
+  - key: scan-interval
+    field: ScanInterval
+    type: duration
+    title: Scan Interval
+    description: Interval of reconcile scans of source storages for missed archives.
+    default: 15m
+
+  - key: inotify
+    field: Inotify
+    type: boolean
+    title: Inotify
+    description: Watch source storages for finished archives.
+    default: true
+
+  - key: restore-ionice
+    field: RestoreIOnice
+    type: enum
+    values: [best-effort:0, best-effort:4, best-effort:7, idle]
+    title: Restore I/O Priority
+    description: I/O scheduling class used for restore processes.
+    default: best-effort:4

@@ -1,0 +1,219 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Source of truth for the rclone-backup storage type's storage.cfg
+# properties. `make generate` turns it into:
+#   - perl/PVE/Storage/Custom/RcloneBackup/Schema.pm (properties()/options())
+#   - internal/config/storage_gen.go                (Go types and decoder)
+#   - internal/config/storage.schema.json           (JSON Schema for API/TUI)
+#
+# Rules:
+#   - Every property defined here must start with "rclone-": storage.cfg shares
+#     one property namespace between all storage plugins and a duplicate name
+#     makes PVE::Storage fail to load on the whole node.
+#   - Patterns must be valid in both Perl and Go RE2 and are anchored.
+#   - option: required | optional | fixed (set on creation only, required)
+#             | fixed-optional (set on creation only, optional)
+#   - gui: advanced | hidden (for the upcoming schema-driven PVE storage GUI)
+
+go_type: Storage
+storage_type: rclone-backup
+perl_package: PVE::Storage::Custom::RcloneBackup::Schema
+
+# Properties defined by PVE's base storage plugin that this type accepts.
+base_options:
+  - content
+  - nodes
+  - disable
+  - shared
+  - prune-backups
+  - max-protected-backups
+  - bwlimit
+
+properties:
+  - key: rclone-remote
+    field: Remote
+    type: string
+    title: Remote
+    description: Name of the transport remote configured with 'pve-rclone-backup remote add'.
+    pattern: '[a-z][a-z0-9_-]{0,62}'
+    option: required
+
+  - key: rclone-path
+    field: Path
+    type: string
+    title: Repository Path
+    description: Repository base path inside the remote.
+    pattern: '[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*'
+    max_length: 128
+    default: pve-backups
+    option: fixed-optional
+
+  - key: rclone-encryption
+    field: Encryption
+    type: enum
+    values: [crypt, none]
+    title: Encryption
+    description: Client-side encryption of the repository (rclone crypt).
+    default: crypt
+    option: fixed-optional
+
+  - key: rclone-source
+    field: Source
+    type: string
+    title: Source Name
+    description: Namespace of this Proxmox VE installation inside the repository.
+    pattern: '[a-z0-9][a-z0-9-]{0,31}'
+    option: fixed
+
+  - key: rclone-replicate-from
+    field: ReplicateFrom
+    type: list
+    element: storage-id
+    title: Replicate From
+    description: Local backup storages whose finished archives are replicated. Empty disables replication.
+
+  - key: rclone-guests
+    field: Guests
+    type: enum
+    values: [all, tagged, listed]
+    title: Guests
+    description: 'Which guests are replicated: all, guests carrying one of rclone-tags, or rclone-vmids.'
+    default: all
+
+  - key: rclone-tags
+    field: Tags
+    type: list
+    element: tag
+    title: Tags
+    description: Guest tags selecting guests when rclone-guests is "tagged".
+    default: offsite
+
+  - key: rclone-vmids
+    field: VMIDs
+    type: list
+    element: vmid
+    title: Guest IDs
+    description: Guests replicated when rclone-guests is "listed".
+
+  - key: rclone-exclude-vmids
+    field: ExcludeVMIDs
+    type: list
+    element: vmid
+    title: Excluded Guest IDs
+    description: Guests never replicated.
+
+  - key: rclone-backfill
+    field: Backfill
+    type: enum
+    values: [none, latest, all]
+    title: Backfill
+    description: Existing archives to replicate when replication is first enabled.
+    default: latest
+
+  - key: rclone-min-interval
+    field: MinInterval
+    type: duration
+    title: Minimum Interval
+    description: Skip an archive if the guest already has an offsite backup newer than this (e.g. 7d).
+    default: '0'
+    gui: advanced
+
+  - key: rclone-supersede
+    field: Supersede
+    type: boolean
+    title: Supersede
+    description: Drop queued, not yet started uploads of older archives of the same guest.
+    default: true
+    gui: advanced
+
+  - key: rclone-transfers
+    field: Transfers
+    type: integer
+    minimum: 1
+    maximum: 8
+    title: Concurrent Uploads
+    description: Number of archives uploaded concurrently.
+    default: 2
+    gui: advanced
+
+  - key: rclone-bwlimit
+    field: BwLimit
+    type: string
+    max_length: 256
+    title: Upload Bandwidth Limit
+    description: Upload bandwidth limit in rclone syntax, optionally a timetable such as "08:00,1M 23:00,off".
+
+  - key: rclone-segment-size
+    field: SegmentSize
+    type: size
+    minimum: 67108864 # 64 MiB
+    title: Segment Size
+    description: Size of the segments archives are split into.
+    default: 1G
+    gui: advanced
+
+  - key: rclone-verify-interval
+    field: VerifyInterval
+    type: duration
+    title: Verify Interval
+    description: Interval of listing-based verification (presence and provider checksums).
+    default: 1d
+    gui: advanced
+
+  - key: rclone-verify-content
+    field: VerifyContent
+    type: duration
+    allow_off: true
+    title: Content Verify Interval
+    description: Interval of rolling download-based verification, or "off".
+    default: 'off'
+    gui: advanced
+
+  - key: rclone-verify-budget
+    field: VerifyBudget
+    type: size
+    title: Content Verify Budget
+    description: Maximum bytes downloaded per day for content verification.
+    default: 100G
+    gui: advanced
+
+  - key: rclone-min-age
+    field: MinAge
+    type: duration
+    title: Minimum Age
+    description: Retention never deletes offsite backups younger than this.
+    default: 7d
+    gui: advanced
+
+  - key: rclone-keep-min
+    field: KeepMin
+    type: integer
+    minimum: 0
+    title: Keep Minimum
+    description: Retention keeps at least this many complete, verified backups per guest.
+    default: 1
+    gui: advanced
+
+  - key: rclone-delete-grace
+    field: DeleteGrace
+    type: duration
+    title: Delete Grace Period
+    description: Deleted offsite backups are kept as tombstones for this long and can be restored.
+    default: 7d
+    gui: advanced
+
+  - key: rclone-max-deletes
+    field: MaxDeletes
+    type: integer
+    minimum: 0
+    title: Maximum Deletions
+    description: Maximum number of backups a single retention run may delete.
+    default: 25
+    gui: advanced
+
+  - key: rclone-immutable
+    field: Immutable
+    type: boolean
+    title: Immutable
+    description: Refuse every deletion of offsite backups.
+    default: false
