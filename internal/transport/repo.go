@@ -15,8 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rclone/rclone/backend/crypt"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
+	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/obscure"
 	rhash "github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/operations"
@@ -221,4 +223,34 @@ func (t *Target) Probe(ctx context.Context) (*ProbeResult, error) {
 		return nil, err
 	}
 	return res, nil
+}
+
+// keyCheckPlain is the constant whose encrypted name proves a key generation.
+const keyCheckPlain = "pve-rclone-backup-key-check"
+
+// KeyCheckName returns the deterministic encrypted form of a constant name
+// under a key generation (standard filename encryption only). Comparing
+// it with the repository marker tells whether keys are right without
+// decrypting any data.
+func KeyCheckName(g secrets.Generation) (string, error) {
+	if g.FilenameEncryption != "standard" {
+		return "", nil
+	}
+	pw, err := obscure.Obscure(g.Password)
+	if err != nil {
+		return "", err
+	}
+	pw2, err := obscure.Obscure(g.Password2)
+	if err != nil {
+		return "", err
+	}
+	c, err := crypt.NewCipher(configmap.Simple{
+		"password": pw, "password2": pw2, "filename_encryption": g.FilenameEncryption,
+		"filename_encoding": g.FilenameEncoding, "suffix": g.Suffix,
+		"directory_name_encryption": fmt.Sprint(g.DirectoryNameEncryption),
+	})
+	if err != nil {
+		return "", err
+	}
+	return c.EncryptFileName(keyCheckPlain), nil
 }

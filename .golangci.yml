@@ -33,7 +33,11 @@ linters:
       # Tests plant fake credentials and convert the test process uid.
       - path: _test\.go
         linters: [gosec]
-        text: "G101|G115|G302|G304"
+        text: "G101|G115|G302|G304|G703"
+      # Test helpers generate deterministic pseudo-random archives.
+      - path: internal/repo/repotest/
+        linters: [gosec]
+        text: "G115|G404"
 formatters:
   enable:
     - gofmt

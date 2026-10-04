@@ -1,0 +1,96 @@
+{
+  "format": "pve-rclone-backup.manifest",
+  "version": 1,
+  "repo_uuid": "6f0c2f1e-3a7b-4c2d-9e8f-0123456789ab",
+  "generation": 1,
+  "backup": {
+    "source": "homelab",
+    "source_uuid": "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d",
+    "vmtype": "qemu",
+    "vmid": 100,
+    "ts_label": "2026_10_04-02_00_01",
+    "backup_time": 1790992801,
+    "collision_index": 0,
+    "volname": "backup/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst"
+  },
+  "archive": {
+    "filename": "vzdump-qemu-100-2026_10_04-02_00_01.vma.zst",
+    "format": "vma",
+    "compression": "zst",
+    "size": 3145733,
+    "sha256": "abababababababababababababababababababababababababababababababab",
+    "source_storage": "local",
+    "source_node": "pve1",
+    "source_mtime": "2026-10-04T02:14:55Z"
+  },
+  "segments": {
+    "size": 1048576,
+    "count": 4,
+    "naming": "part.%06d",
+    "list": [
+      {
+        "index": 0,
+        "size": 1048576,
+        "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+        "stored_size": 1048864,
+        "stored_hash": {
+          "quickxor": "q0"
+        }
+      },
+      {
+        "index": 1,
+        "size": 1048576,
+        "sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+        "stored_size": 1048864,
+        "stored_hash": {
+          "quickxor": "q1"
+        }
+      },
+      {
+        "index": 2,
+        "size": 1048576,
+        "sha256": "0303030303030303030303030303030303030303030303030303030303030303",
+        "stored_size": 1048864,
+        "stored_hash": {
+          "quickxor": "q2"
+        }
+      },
+      {
+        "index": 3,
+        "size": 5,
+        "sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+        "stored_size": 53,
+        "stored_hash": {
+          "quickxor": "q3"
+        }
+      }
+    ]
+  },
+  "guest": {
+    "name": "web01",
+    "config": "name: web01\nmemory: 2048\n",
+    "firewall": "[OPTIONS]\nenable: 1\n",
+    "firewall_known": true
+  },
+  "sidecars": {
+    "log": {
+      "name": "vzdump.log",
+      "size": 123,
+      "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    },
+    "notes_at_upload": "nightly"
+  },
+  "pve": {
+    "version": "9.2.21",
+    "storage_apiver": 15
+  },
+  "tool": {
+    "version": "0.1.0",
+    "rclone": "v1.75.1"
+  },
+  "uploaded_at": "2026-10-04T05:12:09Z",
+  "upload_verification": {
+    "level": 2,
+    "method": "crypt-ciphertext-hash+listing"
+  }
+}
