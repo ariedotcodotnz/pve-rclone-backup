@@ -452,3 +452,9 @@ type KitStatus struct {
 	ExportedAt  *time.Time `json:"exported_at,omitempty"`
 	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
 }
+
+// BackupUpdate changes a backup's notes or protection.
+type BackupUpdate struct {
+	Notes     *string `json:"notes,omitempty"`
+	Protected *bool   `json:"protected,omitempty"`
+}

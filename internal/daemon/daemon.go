@@ -85,6 +85,7 @@ type Daemon struct {
 	remotes    *remotes.Manager
 	keyStore   KeyStore
 	ledger     *recoverykit.Ledger
+	metaWake   chan struct{}
 	startedAt  time.Time
 	instanceID string
 	problems   []string
@@ -128,7 +129,8 @@ func Run(ctx context.Context, opts Options) error {
 		opts.Locker = &cfs.Locker{Dir: filepath.Join(opts.PVEDir, "priv", "lock")}
 	}
 	d := &Daemon{log: opts.Logger, opts: opts, startedAt: time.Now(), instanceID: rand.Text(), keyStore: opts.KeyStore,
-		ledger: recoverykit.NewLedger(filepath.Join(opts.PVEDir, "pve-rclone-backup", "kits.json"), opts.Locker)}
+		metaWake: make(chan struct{}, 1),
+		ledger:   recoverykit.NewLedger(filepath.Join(opts.PVEDir, "pve-rclone-backup", "kits.json"), opts.Locker)}
 
 	st, err := d.openStore(ctx)
 	if err != nil {
@@ -200,6 +202,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.jobRoutes()
 	d.remoteRoutes()
 	d.setupRoutes()
+	d.backupRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
@@ -220,6 +223,7 @@ func Run(ctx context.Context, opts Options) error {
 	workers.Go(func() { d.storages.Run(serveCtx) })
 	workers.Go(func() { d.discovery.Run(serveCtx) })
 	workers.Go(func() { d.scheduler.Run(serveCtx) })
+	workers.Go(func() { d.pushMeta(serveCtx) })
 
 	if opts.Ready != nil {
 		opts.Ready()

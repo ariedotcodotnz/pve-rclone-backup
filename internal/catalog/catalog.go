@@ -52,8 +52,8 @@ func Entry(storeID string, b repo.ScannedBackup, now time.Time) (*store.Backup, 
 	if b.Meta != nil {
 		e.Notes, e.Protected = b.Meta.Notes, b.Meta.Protected
 		if t := b.Meta.Tombstone; t != nil {
-			after := t.DeleteAfter.Unix()
-			e.DeleteAfter = &after
+			after, at := t.DeleteAfter.Unix(), t.RequestedAt.Unix()
+			e.DeleteAfter, e.TombstoneAt, e.TombstoneReason, e.TombstoneBy = &after, &at, t.Reason, t.By
 		}
 	}
 	switch b.State {

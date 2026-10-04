@@ -124,20 +124,26 @@ type Backup struct {
 	VerifyLevel    int
 	VerifiedAt     *int64
 	VerifyResult   string
+	// MetaRev counts local changes of notes, protection and tombstones.
+	MetaRev         int64
+	TombstoneAt     *int64 // when deletion was requested
+	TombstoneReason string // user | retention
+	TombstoneBy     string
 }
 
 const backupColumns = `id, storeid, volname, vmtype, vmid, backup_time, ts_label, collision_index,
 	remote_dir, generation, state, archive_size, archive_sha256, archive_format, compression,
 	segment_size, segment_count, guest_name, notes, protected, meta_dirty, delete_after, uploaded_at,
-	manifest_json, verify_level, verified_at, verify_result`
+	manifest_json, verify_level, verified_at, verify_result, meta_rev, tombstone_at, tombstone_reason, tombstone_by`
 
 func scanBackup(row scanner) (*Backup, error) {
 	var b Backup
-	var comp, guest, notes, vres sql.NullString
+	var comp, guest, notes, vres, treason, tby sql.NullString
 	err := row.Scan(&b.ID, &b.StoreID, &b.Volname, &b.VMType, &b.VMID, &b.BackupTime, &b.TSLabel,
 		&b.CollisionIndex, &b.RemoteDir, &b.Generation, &b.State, &b.ArchiveSize, &b.ArchiveSHA256,
 		&b.ArchiveFormat, &comp, &b.SegmentSize, &b.SegmentCount, &guest, &notes, &b.Protected,
-		&b.MetaDirty, &b.DeleteAfter, &b.UploadedAt, &b.ManifestJSON, &b.VerifyLevel, &b.VerifiedAt, &vres)
+		&b.MetaDirty, &b.DeleteAfter, &b.UploadedAt, &b.ManifestJSON, &b.VerifyLevel, &b.VerifiedAt, &vres,
+		&b.MetaRev, &b.TombstoneAt, &treason, &tby)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -145,6 +151,7 @@ func scanBackup(row scanner) (*Backup, error) {
 		return nil, err
 	}
 	b.Compression, b.GuestName, b.Notes, b.VerifyResult = comp.String, guest.String, notes.String, vres.String
+	b.TombstoneReason, b.TombstoneBy = treason.String, tby.String
 	return &b, nil
 }
 
@@ -156,8 +163,9 @@ func putBackup(ctx context.Context, e execer, b *Backup) error {
 	_, err := e.ExecContext(ctx, `INSERT INTO backups (storeid, volname, vmtype, vmid, backup_time,
 		ts_label, collision_index, remote_dir, generation, state, archive_size, archive_sha256,
 		archive_format, compression, segment_size, segment_count, guest_name, notes, protected, meta_dirty,
-		delete_after, uploaded_at, manifest_json, verify_level, verified_at, verify_result)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		delete_after, uploaded_at, manifest_json, verify_level, verified_at, verify_result, meta_rev,
+		tombstone_at, tombstone_reason, tombstone_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (storeid, volname) DO UPDATE SET vmtype = excluded.vmtype, vmid = excluded.vmid,
 		backup_time = excluded.backup_time, ts_label = excluded.ts_label,
 		collision_index = excluded.collision_index, remote_dir = excluded.remote_dir,
@@ -168,11 +176,62 @@ func putBackup(ctx context.Context, e execer, b *Backup) error {
 		protected = excluded.protected, meta_dirty = excluded.meta_dirty,
 		delete_after = excluded.delete_after, uploaded_at = excluded.uploaded_at,
 		manifest_json = excluded.manifest_json, verify_level = excluded.verify_level,
-		verified_at = excluded.verified_at, verify_result = excluded.verify_result`,
+		verified_at = excluded.verified_at, verify_result = excluded.verify_result, meta_rev = excluded.meta_rev,
+		tombstone_at = excluded.tombstone_at, tombstone_reason = excluded.tombstone_reason,
+		tombstone_by = excluded.tombstone_by`,
 		b.StoreID, b.Volname, b.VMType, b.VMID, b.BackupTime, b.TSLabel, b.CollisionIndex, b.RemoteDir,
 		b.Generation, b.State, b.ArchiveSize, b.ArchiveSHA256, b.ArchiveFormat, nullString(b.Compression),
 		b.SegmentSize, b.SegmentCount, nullString(b.GuestName), nullString(b.Notes), b.Protected, b.MetaDirty,
-		b.DeleteAfter, b.UploadedAt, b.ManifestJSON, b.VerifyLevel, b.VerifiedAt, nullString(b.VerifyResult))
+		b.DeleteAfter, b.UploadedAt, b.ManifestJSON, b.VerifyLevel, b.VerifiedAt, nullString(b.VerifyResult), b.MetaRev,
+		b.TombstoneAt, nullString(b.TombstoneReason), nullString(b.TombstoneBy))
+	return err
+}
+
+// UpdateBackup changes the notes, protection or tombstone of a catalogue
+// entry and marks it for pushing to the remote meta document.
+func (s *Store) UpdateBackup(ctx context.Context, storeID, volname string, mutate func(b *Backup) error) (*Backup, error) {
+	var out *Backup
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		b, err := scanBackup(tx.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE storeid = ? AND volname = ?", storeID, volname))
+		if err != nil {
+			return err
+		}
+		if err := mutate(b); err != nil {
+			return err
+		}
+		b.MetaDirty, b.MetaRev = true, b.MetaRev+1
+		if err := putBackup(ctx, tx, b); err != nil {
+			return err
+		}
+		out = b
+		return nil
+	})
+	return out, err
+}
+
+// DirtyBackups returns entries whose meta document must be pushed.
+func (s *Store) DirtyBackups(ctx context.Context, limit int) ([]*Backup, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE meta_dirty = 1 ORDER BY id LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*Backup
+	for rows.Next() {
+		b, err := scanBackup(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// MetaPushed clears the dirty flag if the entry did not change since rev
+// was pushed.
+func (s *Store) MetaPushed(ctx context.Context, storeID, volname string, rev int64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE backups SET meta_dirty = 0 WHERE storeid = ? AND volname = ? AND meta_rev = ?",
+		storeID, volname, rev)
 	return err
 }
 
@@ -247,26 +306,18 @@ func (s *Store) DeleteBackup(ctx context.Context, storeID, volname string) error
 // entries whose archive digest is unchanged is preserved.
 func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*Backup) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		type verified struct {
-			sha    string
-			level  int
-			at     *int64
-			result sql.NullString
-		}
-		prev := map[string]verified{}
-		rows, err := tx.QueryContext(ctx,
-			"SELECT volname, archive_sha256, verify_level, verified_at, verify_result FROM backups WHERE storeid = ?", storeID)
+		prev := map[string]*Backup{}
+		rows, err := tx.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE storeid = ?", storeID)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var vol string
-			var v verified
-			if err := rows.Scan(&vol, &v.sha, &v.level, &v.at, &v.result); err != nil {
+			b, err := scanBackup(rows)
+			if err != nil {
 				_ = rows.Close()
 				return err
 			}
-			prev[vol] = v
+			prev[b.Volname] = b
 		}
 		if err := rows.Close(); err != nil {
 			return err
@@ -278,8 +329,18 @@ func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*B
 			if b.StoreID != storeID {
 				return fmt.Errorf("store: catalogue entry %s belongs to storage %s, not %s", b.Volname, b.StoreID, storeID)
 			}
-			if v, ok := prev[b.Volname]; ok && v.sha == b.ArchiveSHA256 && v.level > b.VerifyLevel {
-				b.VerifyLevel, b.VerifiedAt, b.VerifyResult = v.level, v.at, v.result.String
+			if p, ok := prev[b.Volname]; ok && p.ArchiveSHA256 == b.ArchiveSHA256 {
+				if p.VerifyLevel > b.VerifyLevel {
+					b.VerifyLevel, b.VerifiedAt, b.VerifyResult = p.VerifyLevel, p.VerifiedAt, p.VerifyResult
+				}
+				// Local changes not yet pushed win over the remote state.
+				if p.MetaDirty {
+					b.Notes, b.Protected, b.MetaDirty, b.MetaRev = p.Notes, p.Protected, true, p.MetaRev
+					b.DeleteAfter, b.TombstoneAt, b.TombstoneReason, b.TombstoneBy = p.DeleteAfter, p.TombstoneAt, p.TombstoneReason, p.TombstoneBy
+					if p.State == "tombstoned" || b.State == "tombstoned" {
+						b.State = p.State
+					}
+				}
 			}
 			if err := putBackup(ctx, tx, b); err != nil {
 				return fmt.Errorf("store: replace catalogue %s: %w", b.Volname, err)

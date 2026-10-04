@@ -13,10 +13,13 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
     docker build -t "$image" "$root/test/perl"
 fi
 
-# Exercise the real daemon too when it has been built (make build).
+# Exercise the real daemon and CLI too when they have been built (make build).
 daemon_args=""
 if [ -x "$root/bin/pve-rclone-backupd" ]; then
     daemon_args="-v $root/bin/pve-rclone-backupd:/usr/sbin/pve-rclone-backupd:ro -e PVE_RCLONE_BACKUPD=/usr/sbin/pve-rclone-backupd"
+fi
+if [ -x "$root/bin/pve-rclone-backup" ]; then
+    daemon_args="$daemon_args -v $root/bin/pve-rclone-backup:/usr/bin/pve-rclone-backup:ro -e PVE_RCLONE_BACKUP_CLI=/usr/bin/pve-rclone-backup"
 fi
 
 # shellcheck disable=SC2086 # daemon_args is a list of options

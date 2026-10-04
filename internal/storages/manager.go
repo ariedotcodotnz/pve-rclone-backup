@@ -556,6 +556,17 @@ func (m *Manager) Repo(id string) (*repo.Repo, *config.Storage, error) {
 	return e.repo, e.cfg, nil
 }
 
+// Config returns a storage's configuration.
+func (m *Manager) Config(id string) (*config.Storage, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entries[id]
+	if e == nil || e.cfg == nil {
+		return nil, false
+	}
+	return e.cfg, true
+}
+
 // Targets returns the configurations of the storages enabled on this node
 // with a valid configuration, sorted by ID.
 func (m *Manager) Targets() []*config.Storage {

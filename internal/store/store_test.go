@@ -459,3 +459,62 @@ func TestMiscTables(t *testing.T) {
 		t.Fatalf("reopened alert = %+v", alerts)
 	}
 }
+
+func TestPendingMetaChanges(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	if err := s.PutStorage(ctx, &StorageRow{StoreID: "offsite", Remote: "od", BasePath: "p", Source: "lab", ConfigHash: "h"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutBackup(ctx, testBackup("b/1", 100, "s1")); err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.UpdateBackup(ctx, "offsite", "b/1", func(b *Backup) error {
+		at, after := int64(10), int64(20)
+		b.Notes, b.Protected, b.State, b.TombstoneAt, b.DeleteAfter, b.TombstoneReason = "keep", true, "tombstoned", &at, &after, "user"
+		return nil
+	})
+	if err != nil || !b.MetaDirty || b.MetaRev != 1 {
+		t.Fatalf("update = %+v, %v", b, err)
+	}
+	if _, err := s.UpdateBackup(ctx, "offsite", "missing", func(*Backup) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("update of a missing entry: %v", err)
+	}
+	dirty, err := s.DirtyBackups(ctx, 10)
+	if err != nil || len(dirty) != 1 || dirty[0].TombstoneReason != "user" || *dirty[0].TombstoneAt != 10 {
+		t.Fatalf("dirty = %+v, %v", dirty, err)
+	}
+
+	// A resync keeps changes that were not pushed yet.
+	if err := s.ReplaceCatalog(ctx, "offsite", []*Backup{testBackup("b/1", 100, "s1")}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetBackup(ctx, "offsite", "b/1")
+	if got.Notes != "keep" || !got.Protected || got.State != "tombstoned" || !got.MetaDirty || got.MetaRev != 1 || got.DeleteAfter == nil {
+		t.Fatalf("after resync = %+v", got)
+	}
+
+	// A push of an older revision does not clear a newer change.
+	if _, err := s.UpdateBackup(ctx, "offsite", "b/1", func(b *Backup) error { b.Notes = "newer"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MetaPushed(ctx, "offsite", "b/1", 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetBackup(ctx, "offsite", "b/1"); !got.MetaDirty {
+		t.Fatal("stale push cleared the dirty flag")
+	}
+	if err := s.MetaPushed(ctx, "offsite", "b/1", 2); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, _ := s.DirtyBackups(ctx, 10); len(dirty) != 0 {
+		t.Fatalf("dirty after push = %+v", dirty)
+	}
+	// Once pushed, the remote state is authoritative again.
+	if err := s.ReplaceCatalog(ctx, "offsite", []*Backup{testBackup("b/1", 100, "s1")}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetBackup(ctx, "offsite", "b/1"); got.Notes == "newer" || got.State != "complete" {
+		t.Fatalf("after pushed resync = %+v", got)
+	}
+}
