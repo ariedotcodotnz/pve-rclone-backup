@@ -138,18 +138,32 @@ sub status($class, $storeid, $scfg, $cache) {
     return (@v, $res->{active} ? 1 : 0);
 }
 
+# PVE activates a storage being added before it writes storage.cfg, so the
+# daemon does not serve it yet: its configuration is validated instead
+# (fast, no network). Returns the status, or undef for such a new storage.
+sub _status_or_validate($storeid, $scfg) {
+    my $res = eval { _request('GET', _storage_path($storeid) . '/status', timeout => 3) };
+    return $res if !$@;
+    my $err = $@;
+    die $err if ($PVE::Storage::Custom::RcloneBackup::Client::LAST_ERROR_CODE // '') ne 'not_found';
+    _request('POST', _storage_path($storeid) . '/validate', body => { config => $scfg }, timeout => 10);
+    return undef;
+}
+
 sub activate_storage($class, $storeid, $scfg, $cache = undef, $hints = undef) {
     # Succeeds while the daemon serves this storage, even if the remote is
     # offline: the catalogue stays browsable.
-    _request('GET', _storage_path($storeid), timeout => 3);
+    _status_or_validate($storeid, $scfg);
     return 1;
 }
 
 sub deactivate_storage($class, $storeid, $scfg, $cache = undef) { return 1 }
 
 sub check_connection($class, $storeid, $scfg) {
-    my $res = eval { _request('GET', _storage_path($storeid) . '/status', timeout => 3) };
-    return (!$@ && ref($res) eq 'HASH' && $res->{active}) ? 1 : 0;
+    my $res = eval { _status_or_validate($storeid, $scfg) };
+    return 0 if $@;
+    return 1 if !defined($res);
+    return (ref($res) eq 'HASH' && $res->{active}) ? 1 : 0;
 }
 
 sub activate_volume($class, $storeid, $scfg, $volname, $snapname = undef, $cache = undef, $hints = undef) {

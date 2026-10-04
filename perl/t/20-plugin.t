@@ -64,6 +64,11 @@ my $d = FakeDaemon->new(routes => {
         ]);
     },
     'POST /v1/storages/offsite/validate' => sub ($req) { return (200, { ok => JSON::true }) },
+    # Storages being added: not served yet, one valid and one not.
+    'POST /v1/storages/added/validate' => sub ($req) { return (200, { ok => JSON::true }) },
+    'POST /v1/storages/broken/validate' => sub ($req) {
+        return (412, { error => { code => 'precondition_failed', message => 'no repository is known' } });
+    },
 });
 local $PVE::Storage::Custom::RcloneBackup::Client::SOCKET_PATH = $d->socket_path;
 
@@ -87,6 +92,12 @@ is($vtype, 'backup', 'path() vtype');
 is_deeply([$plugin->status('offsite', $scfg, {})], [1099511627776, 549755813888, 549755813888, 1], 'status');
 ok($plugin->activate_storage('offsite', $scfg, {}), 'activate_storage');
 ok($plugin->check_connection('offsite', $scfg), 'check_connection');
+# PVE activates a storage being added before storage.cfg names it.
+ok($plugin->activate_storage('added', $scfg, {}), 'activating a storage being added validates it');
+ok($plugin->check_connection('added', $scfg), 'a valid storage being added is online');
+ok(!eval { $plugin->activate_storage('broken', $scfg, {}) }, 'an invalid storage being added fails to activate');
+like($@, qr/no repository is known/, 'with the reason');
+ok(!$plugin->check_connection('broken', $scfg), 'an invalid storage being added is offline');
 is($plugin->get_identity($scfg, 'offsite'), '6f0c2f1e-3a7b-4c2d-9e8f-0123456789ab', 'get_identity');
 
 # Listing through PVE::Storage.
