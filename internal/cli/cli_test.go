@@ -154,8 +154,9 @@ func TestRemoteAddRelay(t *testing.T) {
 		},
 	})
 
-	// Interactive: the redirect is pasted, the drive type chosen by number.
-	in := strings.NewReader("http://localhost:53682/?code=c&state=abc\n1\n")
+	// Interactive: no client secret, the redirect is pasted, the drive
+	// type chosen by number.
+	in := strings.NewReader("\nhttp://localhost:53682/?code=c&state=abc\n1\n")
 	r := run(t, socket, in, true, "remote", "add", "od", "--client-id", "app", "--param", "region=global")
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s%s", r.code, r.out, r.err)
@@ -225,5 +226,52 @@ func TestQueueAndStatusOutput(t *testing.T) {
 	var jobs []apiv1.Job
 	if err := json.Unmarshal([]byte(r.out), &jobs); err != nil || len(jobs) != 1 || jobs[0].ID != 7 {
 		t.Fatalf("json queue: %v %s", err, r.out)
+	}
+}
+
+func TestSafeWriter(t *testing.T) {
+	var buf bytes.Buffer
+	w := newSafeWriter(&buf)
+	// An escape sequence, a C1 control split across writes, and normal text.
+	_, _ = w.Write([]byte("ok \x1b[2J\x1b]0;title\x07 tab\there\r\nnext "))
+	_, _ = w.Write([]byte("caf\xc3"))
+	_, _ = w.Write([]byte("\xa9 \xc2"))
+	_, _ = w.Write([]byte("\x9b31m end\xff\n"))
+	if got := buf.String(); got != "ok [2J]0;title tab\there\nnext café 31m end\n" {
+		t.Fatalf("sanitized = %q", got)
+	}
+	if newSafeWriter(w) != w {
+		t.Fatal("double wrapping")
+	}
+}
+
+func TestSecretsStayOffTheCommandLine(t *testing.T) {
+	dir := t.TempDir()
+	secretFile := filepath.Join(dir, "secret")
+	_ = os.WriteFile(secretFile, []byte("s3cr3t\n"), 0o600)
+	var got apiv1.RemoteSetupRequest
+	socket := fakeDaemon(t, map[string]api.HandlerFunc{
+		"POST /v1/remote-setup": func(w http.ResponseWriter, r *http.Request) error {
+			_ = api.DecodeJSON(r, &got)
+			return api.WriteJSON(w, 200, apiv1.RemoteSetup{ID: "s1", Name: got.Name, Status: apiv1.SetupDone})
+		},
+		"DELETE /v1/remote-setup/s1": func(w http.ResponseWriter, r *http.Request) error { return api.WriteJSON(w, 200, struct{}{}) },
+	})
+	r := run(t, socket, nil, false, "remote", "add", "od", "--client-id", "app", "--client-secret-file", secretFile,
+		"--param", "region=@"+secretFile)
+	if r.code != 0 || got.Params["client_secret"] != "s3cr3t" || got.Params["region"] != "s3cr3t" {
+		t.Fatalf("exit %d, params %v: %s", r.code, got.Params, r.err)
+	}
+	if r := run(t, socket, nil, false, "remote", "add", "od", "--client-secret", "x"); r.code != ExitUsage {
+		t.Fatalf("--client-secret still accepted: %d", r.code)
+	}
+	// Escape sequences from the daemon are not printed.
+	socket = fakeDaemon(t, map[string]api.HandlerFunc{
+		"GET /v1/jobs/{id}": func(w http.ResponseWriter, r *http.Request) error {
+			return api.WriteJSON(w, 200, apiv1.JobDetail{Job: apiv1.Job{ID: 1, State: "failed", LastError: "boom\x1b]52;c;cm0gLXJmIH4=\x07"}})
+		},
+	})
+	if r := run(t, socket, nil, false, "queue", "show", "1"); strings.ContainsRune(r.out, 0x1b) || !strings.Contains(r.out, "boom") {
+		t.Fatalf("queue show printed %q", r.out)
 	}
 }

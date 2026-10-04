@@ -88,6 +88,7 @@ func (a *App) do(ctx context.Context, method, path string, in, out any) error {
 
 // Run executes a command line and returns the exit code.
 func (a *App) Run(ctx context.Context, args []string) int {
+	a.Out, a.Err = newSafeWriter(a.Out), newSafeWriter(a.Err)
 	root := a.rootCommand()
 	root.SetArgs(args)
 	root.SetIn(a.In)

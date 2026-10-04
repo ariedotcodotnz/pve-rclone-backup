@@ -103,7 +103,7 @@ type setupFlags struct {
 }
 
 func (f *setupFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a setup question non-interactively (NAME=VALUE, repeatable; 'redirect' is the pasted OAuth redirect URL)")
+	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a setup question non-interactively (NAME=VALUE, repeatable; 'redirect' is the pasted OAuth redirect URL; VALUE @FILE reads the value from FILE)")
 	cmd.Flags().StringVar(&f.auth, "auth", "relay", "authorization method: relay (open a URL anywhere, paste back the redirect) or token (paste the output of 'rclone authorize')")
 }
 
@@ -115,7 +115,11 @@ func (f *setupFlags) parse() (map[string]string, error) {
 	for _, a := range f.answers {
 		k, v, ok := strings.Cut(a, "=")
 		if !ok || k == "" {
-			return nil, usagef("--answer %q is not NAME=VALUE", a)
+			return nil, usagef("--answer %q is not NAME=VALUE", k)
+		}
+		v, err := secretValue(v)
+		if err != nil {
+			return nil, err
 		}
 		out[k] = v
 	}
@@ -124,9 +128,9 @@ func (f *setupFlags) parse() (map[string]string, error) {
 
 func (a *App) remoteAddCommand() *cobra.Command {
 	var (
-		provider, clientID, clientSecret string
-		extra                            []string
-		sf                               setupFlags
+		provider, clientID, secretFile string
+		extra                          []string
+		sf                             setupFlags
 	)
 	cmd := &cobra.Command{
 		Use:   "add <remote>",
@@ -147,15 +151,31 @@ Registering your own Microsoft app (client ID and secret) avoids throttling of r
 			for _, kv := range extra {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok || k == "" {
-					return usagef("--param %q is not NAME=VALUE", kv)
+					return usagef("--param %q is not NAME=VALUE", k)
+				}
+				v, err := secretValue(v)
+				if err != nil {
+					return err
 				}
 				params[k] = v
 			}
 			if clientID != "" {
 				params["client_id"] = clientID
 			}
-			if clientSecret != "" {
-				params["client_secret"] = clientSecret
+			if secretFile != "" {
+				secret, err := secretValue("@" + secretFile)
+				if err != nil {
+					return err
+				}
+				params["client_secret"] = secret
+			} else if clientID != "" && a.Interactive {
+				secret, err := a.promptSecret("Client secret of your app (empty if none): ")
+				if err != nil {
+					return err
+				}
+				if secret != "" {
+					params["client_secret"] = secret
+				}
 			}
 			var s apiv1.RemoteSetup
 			if err := a.do(cmd.Context(), http.MethodPost, "/v1/remote-setup",
@@ -167,8 +187,8 @@ Registering your own Microsoft app (client ID and secret) avoids throttling of r
 	}
 	cmd.Flags().StringVar(&provider, "provider", "onedrive", "storage provider")
 	cmd.Flags().StringVar(&clientID, "client-id", "", "OAuth client ID of your own app registration")
-	cmd.Flags().StringVar(&clientSecret, "client-secret", "", "OAuth client secret of your own app registration")
-	cmd.Flags().StringArrayVar(&extra, "param", nil, "set another backend option (NAME=VALUE, repeatable)")
+	cmd.Flags().StringVar(&secretFile, "client-secret-file", "", "file holding the OAuth client secret of your own app registration (asked for interactively otherwise)")
+	cmd.Flags().StringArrayVar(&extra, "param", nil, "set another backend option (NAME=VALUE, repeatable; VALUE @FILE reads the value from FILE)")
 	sf.register(cmd)
 	return cmd
 }
