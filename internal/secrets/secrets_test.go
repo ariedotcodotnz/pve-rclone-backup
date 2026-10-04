@@ -235,3 +235,32 @@ func TestKeyStore(t *testing.T) {
 		t.Fatal("unknown encoding accepted")
 	}
 }
+
+func TestMergeKeys(t *testing.T) {
+	now := time.Unix(1790000000, 0)
+	local, err := NewRepoKeys("6f0c2f1e-3a7b-4c2d-9e8f-0123456789ab", "base32768", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, changed, err := MergeKeys(local, local); err != nil || changed || got != local {
+		t.Fatalf("merge with itself: %v %v", changed, err)
+	}
+	g2, _ := NewGeneration(2, "base32768", now)
+	newer := *local
+	newer.Generations = append(append([]Generation(nil), local.Generations...), g2)
+	got, changed, err := MergeKeys(local, &newer)
+	if err != nil || !changed || len(got.Generations) != 2 {
+		t.Fatalf("merge newer: %+v %v %v", got, changed, err)
+	}
+	// An older kit (fewer generations) adds nothing.
+	if got, changed, err := MergeKeys(&newer, local); err != nil || changed || len(got.Generations) != 2 {
+		t.Fatalf("merge older: %v %v", changed, err)
+	}
+	other, _ := NewRepoKeys(local.RepoUUID, "base32768", now)
+	if _, _, err := MergeKeys(local, other); !errors.Is(err, ErrKeyConflict) {
+		t.Fatalf("conflicting keys: %v", err)
+	}
+	if got, changed, err := MergeKeys(nil, local); err != nil || !changed || got != local {
+		t.Fatalf("merge into nothing: %v %v", changed, err)
+	}
+}

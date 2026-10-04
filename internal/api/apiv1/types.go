@@ -117,6 +117,9 @@ type Storage struct {
 	Generation    int        `json:"generation,omitzero"`
 	LastResyncAt  *time.Time `json:"last_resync_at,omitempty"`
 	Usage         *Usage     `json:"usage,omitempty"`
+	// KitConfirmed reports a confirmed recovery kit for the repository;
+	// replication of encrypted repositories waits for it.
+	KitConfirmed bool `json:"kit_confirmed"`
 }
 
 // Storage health values.
@@ -276,4 +279,176 @@ type JobDetail struct {
 	Job
 	Segments []JobSegment `json:"segments"`
 	Events   []JobEvent   `json:"events"`
+}
+
+// Provider is a supported storage backend.
+type Provider struct {
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	MaxObjectSize int64  `json:"max_object_size,omitzero"`
+	RecycleBin    bool   `json:"recycle_bin"`
+}
+
+// Remote is a configured transport remote. Credentials are never
+// included.
+type Remote struct {
+	Name        string     `json:"name"`
+	Type        string     `json:"type"`
+	Supported   bool       `json:"supported"`
+	Authorized  bool       `json:"authorized"` // has an OAuth refresh token (OAuth backends)
+	TokenExpiry *time.Time `json:"token_expiry,omitempty"`
+	CustomApp   bool       `json:"custom_app"` // uses its own OAuth client ID
+	DriveType   string     `json:"drive_type,omitempty"`
+	DriveID     string     `json:"drive_id,omitempty"`
+	Storages    []string   `json:"storages"` // storages using this remote
+}
+
+// ProbeResult reports a remote connectivity test.
+type ProbeResult struct {
+	LatencyMS int64  `json:"latency_ms"`
+	HashType  string `json:"hash_type,omitempty"`
+	Usage     *Usage `json:"usage,omitempty"`
+}
+
+// RemoteSetupRequest starts configuring a remote.
+type RemoteSetupRequest struct {
+	Name     string            `json:"name"`
+	Provider string            `json:"provider"`
+	Params   map[string]string `json:"params,omitempty"` // backend options, e.g. client_id
+}
+
+// RemoteSetupAnswer answers the current question of a setup session.
+type RemoteSetupAnswer struct {
+	State  string `json:"state"`
+	Result string `json:"result"`
+}
+
+// OAuthRedirect carries the redirect URL the user's browser could not
+// load (http://localhost:53682/?code=...&state=...).
+type OAuthRedirect struct {
+	URL string `json:"url"`
+}
+
+// Remote setup session statuses.
+const (
+	SetupQuestion    = "question"    // answer Option with State
+	SetupAuthorizing = "authorizing" // open AuthURL, then send the redirect URL
+	SetupDone        = "done"
+	SetupFailed      = "failed"
+)
+
+// RemoteSetup is the state of a remote setup or reconnect session.
+type RemoteSetup struct {
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	Provider  string       `json:"provider"`
+	Reconnect bool         `json:"reconnect"`
+	Status    string       `json:"status"`
+	State     string       `json:"state,omitempty"`
+	Option    *SetupOption `json:"option,omitempty"`
+	Error     string       `json:"error,omitempty"`
+	AuthURL   string       `json:"auth_url,omitempty"`
+}
+
+// SetupOption is a question asked while configuring a remote.
+type SetupOption struct {
+	Name       string         `json:"name"`
+	Help       string         `json:"help"`
+	Type       string         `json:"type"`
+	Default    string         `json:"default,omitempty"`
+	Examples   []SetupExample `json:"examples,omitempty"`
+	Required   bool           `json:"required"`
+	IsPassword bool           `json:"is_password"`
+	Exclusive  bool           `json:"exclusive"`
+}
+
+// SetupExample is a suggested answer.
+type SetupExample struct {
+	Value string `json:"value"`
+	Help  string `json:"help"`
+}
+
+// StorageInitRequest creates (or adopts) the repository of a storage
+// before its storage.cfg entry is added.
+type StorageInitRequest struct {
+	Remote     string `json:"remote"`
+	Path       string `json:"path"`
+	Source     string `json:"source"`
+	Encryption string `json:"encryption"` // crypt (default) or none
+	// AdoptSource takes over a source name registered by another
+	// installation (disaster recovery).
+	AdoptSource bool `json:"adopt_source,omitempty"`
+}
+
+// StorageInitResponse reports the repository a storage is bound to.
+type StorageInitResponse struct {
+	RepoUUID   string `json:"repo_uuid"`
+	Created    bool   `json:"created"` // false: an existing repository was adopted
+	Encryption string `json:"encryption"`
+	// KitRequired means replication waits for a confirmed recovery kit.
+	KitRequired bool `json:"kit_required"`
+}
+
+// KitTarget selects a repository for a recovery kit, by storage ID (for
+// configured storages) or by location.
+type KitTarget struct {
+	Storage string `json:"storage"`
+	Remote  string `json:"remote,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
+
+// KitExportRequest exports a recovery kit.
+type KitExportRequest struct {
+	Targets      []KitTarget `json:"targets"` // empty: all configured storages
+	IncludeToken bool        `json:"include_token"`
+	Passphrase   string      `json:"passphrase,omitempty"`
+}
+
+// KitExportResponse carries the kit text.
+type KitExportResponse struct {
+	Kit       string   `json:"kit"`
+	Checksum  string   `json:"checksum"`
+	Repos     []string `json:"repos"`
+	Encrypted bool     `json:"encrypted"`
+}
+
+// KitConfirmRequest confirms that a kit was stored safely.
+type KitConfirmRequest struct {
+	Checksum string `json:"checksum"`
+}
+
+// KitConfirmResponse lists the confirmed repositories.
+type KitConfirmResponse struct {
+	Repos []string `json:"repos"`
+}
+
+// KitRequest carries a kit for import or verification.
+type KitRequest struct {
+	Kit         string `json:"kit"`
+	Passphrase  string `json:"passphrase,omitempty"`
+	ImportToken bool   `json:"import_token,omitempty"`
+}
+
+// KitRepoResult reports one repository of an imported or verified kit.
+type KitRepoResult struct {
+	RepoUUID     string `json:"repo_uuid"`
+	Storage      string `json:"storage"`
+	Remote       string `json:"remote"`
+	Path         string `json:"path"`
+	Source       string `json:"source"`
+	Encryption   string `json:"encryption"`
+	Keys         string `json:"keys,omitempty"`          // imported | merged | present | none
+	RemoteConfig string `json:"remote_config,omitempty"` // created | exists | not_in_kit | skipped
+	OK           bool   `json:"ok"`
+	Error        string `json:"error,omitempty"`
+}
+
+// KitStatus is the recovery kit state of a repository.
+type KitStatus struct {
+	RepoUUID    string     `json:"repo_uuid"`
+	Storages    []string   `json:"storages"`
+	Encrypted   bool       `json:"encrypted"`
+	ExportedAt  *time.Time `json:"exported_at,omitempty"`
+	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
 }

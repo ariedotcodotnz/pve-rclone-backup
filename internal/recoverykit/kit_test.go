@@ -4,10 +4,12 @@ package recoverykit
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 )
 
@@ -107,5 +109,33 @@ func TestDamageIsDetected(t *testing.T) {
 	}
 	if _, err := Decode("no kit here", ""); !errors.Is(err, ErrDamaged) {
 		t.Fatalf("missing armor: %v", err)
+	}
+}
+
+func TestLedger(t *testing.T) {
+	dir := t.TempDir()
+	l := NewLedger(filepath.Join(dir, "cfg", "kits.json"), &cfs.Locker{Dir: filepath.Join(dir, "lock")})
+	ctx := t.Context()
+	const a, b = "6f0c2f1e-3a7b-4c2d-9e8f-0123456789ab", "7a1d3e2f-4b8c-4d3e-8f90-123456789abc"
+	if l.Confirmed(a) {
+		t.Fatal("confirmed before export")
+	}
+	now := time.Unix(1790000000, 0)
+	if err := l.Exported(ctx, []string{a, b}, "aaaa-bbbb-cccc-dddd", now); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := l.Confirm(ctx, "wrong", now); err != nil || len(got) != 0 {
+		t.Fatalf("wrong checksum confirmed %v, %v", got, err)
+	}
+	if got, err := l.Confirm(ctx, "aaaa-bbbb-cccc-dddd", now); err != nil || len(got) != 2 || !l.Confirmed(a) || !l.Confirmed(b) {
+		t.Fatalf("confirmed %v, %v", got, err)
+	}
+	// A later export keeps the confirmation.
+	if err := l.Exported(ctx, []string{a}, "eeee-ffff-0000-1111", now); err != nil || !l.Confirmed(a) {
+		t.Fatalf("confirmation lost: %v", err)
+	}
+	const c = "8b2e4f3a-5c9d-4e4f-9a01-23456789abcd"
+	if err := l.MarkConfirmed(ctx, []string{c}, now); err != nil || !l.Confirmed(c) {
+		t.Fatalf("mark confirmed: %v", err)
 	}
 }

@@ -213,3 +213,39 @@ func (s *KeyStore) Save(ctx context.Context, k *RepoKeys) error {
 		return writeFileAtomic(path, append(data, '\n'))
 	})
 }
+
+// ErrKeyConflict means two key sets hold different secrets for the same
+// generation of a repository.
+var ErrKeyConflict = errors.New("secrets: different keys for the same generation")
+
+// MergeKeys adds the generations of incoming that local lacks. It returns
+// local unchanged (and false) when there is nothing to add, and refuses
+// generations whose secrets differ.
+func MergeKeys(local, incoming *RepoKeys) (*RepoKeys, bool, error) {
+	if local == nil {
+		return incoming, true, incoming.validate()
+	}
+	if local.RepoUUID != incoming.RepoUUID {
+		return nil, false, fmt.Errorf("secrets: keys of repository %s cannot be merged into %s", incoming.RepoUUID, local.RepoUUID)
+	}
+	merged := *local
+	merged.Generations = append([]Generation(nil), local.Generations...)
+	changed := false
+	for _, ng := range incoming.Generations {
+		og, err := local.Generation(ng.ID)
+		if err != nil {
+			merged.Generations = append(merged.Generations, ng)
+			changed = true
+			continue
+		}
+		if og.Password != ng.Password || og.Password2 != ng.Password2 || og.FilenameEncryption != ng.FilenameEncryption ||
+			og.FilenameEncoding != ng.FilenameEncoding || og.DirectoryNameEncryption != ng.DirectoryNameEncryption || og.Suffix != ng.Suffix {
+			return nil, false, fmt.Errorf("%w: repository %s generation %d", ErrKeyConflict, local.RepoUUID, ng.ID)
+		}
+	}
+	if !changed {
+		return local, false, nil
+	}
+	slices.SortFunc(merged.Generations, func(a, b Generation) int { return a.ID - b.ID })
+	return &merged, true, merged.validate()
+}

@@ -23,7 +23,10 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/config"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/discovery"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cluster"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/recoverykit"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/remotes"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/replicate"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
@@ -53,11 +56,21 @@ type Options struct {
 	// PVEDir is the cluster file system root holding storage.cfg and the
 	// cluster-wide daemon configuration (default /etc/pve).
 	PVEDir string
-	// Keys loads repository keys (nil: no keys are available). The rclone
-	// engine must have been initialized with the remote store beforehand.
+	// KeyStore stores repository keys cluster-wide. The rclone engine must
+	// have been initialized with the remote store beforehand.
+	KeyStore KeyStore
+	// Keys loads repository keys (default: KeyStore.Load).
 	Keys repo.KeyLoader
+	// Locker takes cluster-wide locks (default: pmxcfs locks below PVEDir).
+	Locker secrets.Locker
 	// Ready, if set, is called once the API is accepting connections.
 	Ready func()
+}
+
+// KeyStore loads and saves repository keys (secrets.KeyStore).
+type KeyStore interface {
+	Load(repoUUID string) (*secrets.RepoKeys, error)
+	Save(ctx context.Context, k *secrets.RepoKeys) error
 }
 
 // Daemon is a running pve-rclone-backupd instance.
@@ -69,6 +82,9 @@ type Daemon struct {
 	storages   *storages.Manager
 	discovery  *discovery.Discoverer
 	scheduler  *jobs.Scheduler
+	remotes    *remotes.Manager
+	keyStore   KeyStore
+	ledger     *recoverykit.Ledger
 	startedAt  time.Time
 	instanceID string
 	problems   []string
@@ -102,10 +118,17 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.PVEDir == "" {
 		opts.PVEDir = DefaultPVEDir
 	}
+	if opts.Keys == nil && opts.KeyStore != nil {
+		opts.Keys = opts.KeyStore.Load
+	}
 	if opts.Keys == nil {
 		opts.Keys = func(string) (*secrets.RepoKeys, error) { return nil, secrets.ErrNotFound }
 	}
-	d := &Daemon{log: opts.Logger, opts: opts, startedAt: time.Now(), instanceID: rand.Text()}
+	if opts.Locker == nil {
+		opts.Locker = &cfs.Locker{Dir: filepath.Join(opts.PVEDir, "priv", "lock")}
+	}
+	d := &Daemon{log: opts.Logger, opts: opts, startedAt: time.Now(), instanceID: rand.Text(), keyStore: opts.KeyStore,
+		ledger: recoverykit.NewLedger(filepath.Join(opts.PVEDir, "pve-rclone-backup", "kits.json"), opts.Locker)}
 
 	st, err := d.openStore(ctx)
 	if err != nil {
@@ -137,6 +160,7 @@ func Run(ctx context.Context, opts Options) error {
 			}
 		},
 	})
+	d.remotes = remotes.New(remotes.Options{Log: d.log, Users: d.remoteUsers})
 	ncfg := d.loadNodeConfig()
 	d.discovery = discovery.New(discovery.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir,
@@ -174,6 +198,8 @@ func Run(ctx context.Context, opts Options) error {
 	d.storageRoutes()
 	d.discoveryRoutes()
 	d.jobRoutes()
+	d.remoteRoutes()
+	d.setupRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
@@ -264,8 +290,19 @@ func (d *Daemon) replicationReady(id string) error {
 		return fmt.Errorf("storage %s is not configured", id)
 	case !s.Active:
 		return fmt.Errorf("storage %s is not ready (%s)", id, s.Health)
+	case s.Encryption == "crypt" && !d.ledger.Confirmed(s.RepoUUID):
+		return fmt.Errorf("storage %s waits for a confirmed recovery kit", id)
 	}
 	return nil
+}
+
+// remoteUsers maps transport remotes to the storages using them.
+func (d *Daemon) remoteUsers() map[string][]string {
+	out := map[string][]string{}
+	for _, s := range d.storages.List() {
+		out[s.Remote] = append(out[s.Remote], s.ID)
+	}
+	return out
 }
 
 func (d *Daemon) watchdog(ctx context.Context, iv time.Duration) {
@@ -339,7 +376,7 @@ func (d *Daemon) status(ctx context.Context) (*apiv1.Status, error) {
 		Version:   version.Get().Version,
 		StartedAt: d.startedAt.UTC(),
 		UptimeSec: int64(time.Since(d.startedAt).Seconds()),
-		Problems:  d.problems,
+		Problems:  slices.Clone(d.problems),
 	}
 	counts, err := d.store.JobCounts(ctx)
 	if err != nil {
@@ -366,6 +403,11 @@ func (d *Daemon) status(ctx context.Context) (*apiv1.Status, error) {
 	for _, a := range alerts {
 		s.Alerts = append(s.Alerts, apiv1.Alert{ID: a.ID, Severity: a.Severity, Storage: a.StoreID,
 			Message: a.Message, RaisedAt: time.Unix(a.RaisedAt, 0).UTC()})
+	}
+	for _, st := range d.storages.List() {
+		if st.Enabled && st.Active && st.Encryption == "crypt" && len(st.ReplicateFrom) > 0 && !d.ledger.Confirmed(st.RepoUUID) {
+			s.Problems = append(s.Problems, fmt.Sprintf("replication to %s waits for a recovery kit: run 'pve-rclone-backup recovery-kit export'", st.ID))
+		}
 	}
 	s.Healthy = len(s.Problems) == 0
 	return s, nil

@@ -49,7 +49,8 @@ type RepoLocation struct {
 	Path   string // repository base path inside the remote
 }
 
-func (l RepoLocation) validate() error {
+// Validate checks the remote name and repository path.
+func (l RepoLocation) Validate() error {
 	if !remoteNameRe.MatchString(l.Remote) {
 		return fmt.Errorf("transport: invalid remote name %q", l.Remote)
 	}
@@ -71,7 +72,7 @@ func (l RepoLocation) Profile() (Profile, error) {
 // OpenBase opens the repository base path without encryption. It holds the
 // plaintext repository marker and, below gN/, the crypt roots.
 func OpenBase(ctx context.Context, l RepoLocation) (*Target, error) {
-	if err := l.validate(); err != nil {
+	if err := l.Validate(); err != nil {
 		return nil, err
 	}
 	return NewTarget(ctx, l.Remote+":"+l.Path)
@@ -90,7 +91,7 @@ func quoteConn(v string) string {
 // in an rclone connection string, so they are never written to
 // remotes.conf and rclone names the remote by a hash, not the keys.
 func OpenCrypt(ctx context.Context, l RepoLocation, g secrets.Generation) (*Target, error) {
-	if err := l.validate(); err != nil {
+	if err := l.Validate(); err != nil {
 		return nil, err
 	}
 	pw, err := obscure.Obscure(g.Password)

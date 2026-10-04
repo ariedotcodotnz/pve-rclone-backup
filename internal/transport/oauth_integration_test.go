@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,13 +20,29 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
 	"github.com/rclone/rclone/fs/rc"
+	"golang.org/x/sys/unix"
 )
+
+// lockOAuthPort serializes tests that use rclone's fixed OAuth port
+// across test processes (internal/remotes has the same helper).
+func lockOAuthPort(t *testing.T) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "pve-rclone-backup-oauth-test.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); _ = f.Close() })
+}
 
 // TestOAuthRelayFlow drives rclone's non-interactive OneDrive configuration
 // against a fake OAuth provider: the daemon resolves the provider URL for
 // the user, the user "pastes" the failed localhost redirect, and the daemon
 // relays it so rclone can exchange the code for a token.
 func TestOAuthRelayFlow(t *testing.T) {
+	lockOAuthPort(t)
 	if l, err := net.Listen("tcp", oauthBindAddress); err != nil {
 		t.Skipf("rclone OAuth port busy: %v", err)
 	} else {

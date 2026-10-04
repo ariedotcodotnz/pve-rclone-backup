@@ -109,7 +109,8 @@ func main() {
 		Socket:    *socket,
 		StateDir:  *stateDir,
 		PVEDir:    *pveDir,
-		Keys:      keys.Load,
+		KeyStore:  keys,
+		Locker:    locker,
 		AllowUIDs: append([]uint32{0}, allowUIDs...),
 	})
 	if err != nil {

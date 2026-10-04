@@ -74,6 +74,22 @@ func waitStorage(t *testing.T, c *client.Client, id string, cond func(apiv1.Stor
 
 func resynced(s apiv1.Storage) bool { return s.Health == apiv1.HealthOK && s.LastResyncAt != nil }
 
+// confirmKit exports and confirms a recovery kit for a storage, which
+// encrypted storages need before they replicate.
+func confirmKit(t *testing.T, c *client.Client, storage string) apiv1.KitExportResponse {
+	t.Helper()
+	var kit apiv1.KitExportResponse
+	if err := c.Do(t.Context(), http.MethodPost, "/v1/recovery-kit/export",
+		apiv1.KitExportRequest{Targets: []apiv1.KitTarget{{Storage: storage}}}, &kit); err != nil {
+		t.Fatal(err)
+	}
+	var conf apiv1.KitConfirmResponse
+	if err := c.Do(t.Context(), http.MethodPost, "/v1/recovery-kit/confirm", apiv1.KitConfirmRequest{Checksum: kit.Checksum}, &conf); err != nil || len(conf.Repos) != 1 {
+		t.Fatalf("confirm = %+v, %v", conf, err)
+	}
+	return kit
+}
+
 func TestStorageEndpoints(t *testing.T) {
 	ctx := t.Context()
 	r, _ := repotest.Init(t)
@@ -330,6 +346,7 @@ func TestDiscoveryEndpoints(t *testing.T) {
 	defer func() { _ = stop() }()
 	c := client.New(e.socket)
 	waitStorage(t, c, "offsite", resynced)
+	confirmKit(t, c, "offsite")
 
 	// The daemon scans on its own once the storage is ready; an explicit
 	// scan then finds the archive already handled.
@@ -388,6 +405,8 @@ func TestReplicationEndToEnd(t *testing.T) {
 	stop := start(t, e)
 	defer func() { _ = stop() }()
 	c := client.New(e.socket)
+	waitStorage(t, c, "offsite", resynced)
+	confirmKit(t, c, "offsite")
 	deadline := time.Now().Add(30 * time.Second)
 	var list []apiv1.Backup
 	for {

@@ -27,7 +27,11 @@ var backupStates = []string{"complete", "tombstoned", "deleting", "damaged"}
 
 func (d *Daemon) storageRoutes() {
 	d.api.Handle("GET /v1/storages", func(w http.ResponseWriter, r *http.Request) error {
-		return api.WriteJSON(w, http.StatusOK, d.storages.List())
+		list := d.storages.List()
+		for i := range list {
+			list[i].KitConfirmed = d.kitConfirmed(list[i])
+		}
+		return api.WriteJSON(w, http.StatusOK, list)
 	})
 	d.api.Handle("GET /v1/storages/{storage}", func(w http.ResponseWriter, r *http.Request) error {
 		s, err := d.storage(r)
@@ -92,7 +96,14 @@ func (d *Daemon) storage(r *http.Request) (apiv1.Storage, error) {
 	if !ok {
 		return s, notConfigured(id)
 	}
+	s.KitConfirmed = d.kitConfirmed(s)
 	return s, nil
+}
+
+// kitConfirmed reports whether a storage's repository needs no further
+// recovery kit (unencrypted repositories need none).
+func (d *Daemon) kitConfirmed(s apiv1.Storage) bool {
+	return s.RepoUUID != "" && (s.Encryption != "crypt" || d.ledger.Confirmed(s.RepoUUID))
 }
 
 func (d *Daemon) listBackups(w http.ResponseWriter, r *http.Request) error {

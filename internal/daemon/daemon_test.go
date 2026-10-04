@@ -24,6 +24,7 @@ import (
 type env struct {
 	socket, stateDir, pveDir string
 	keys                     repo.KeyLoader
+	keyStore                 KeyStore
 }
 
 func newEnv(t *testing.T) env {
@@ -33,6 +34,10 @@ func newEnv(t *testing.T) env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// pmxcfs provides the lock directory.
+	if err := os.MkdirAll(filepath.Join(dir, "pve", "priv", "lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	return env{socket: filepath.Join(dir, "run", "api.sock"), stateDir: filepath.Join(dir, "state"), pveDir: filepath.Join(dir, "pve")}
 }
 
@@ -49,6 +54,7 @@ func start(t *testing.T, e env) (stop func() error) {
 			StateDir:  e.stateDir,
 			PVEDir:    e.pveDir,
 			Keys:      e.keys,
+			KeyStore:  e.keyStore,
 			Node:      "pve-test",
 			AllowUIDs: []uint32{uint32(os.Getuid())},
 			Ready:     func() { close(ready) },

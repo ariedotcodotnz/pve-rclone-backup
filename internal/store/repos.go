@@ -50,3 +50,22 @@ func (s *Store) FindRepository(ctx context.Context, remote, basePath string) (*R
 	}
 	return &r, nil
 }
+
+// ListRepositories returns all known repositories.
+func (s *Store) ListRepositories(ctx context.Context) ([]*Repository, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT uuid, remote, base_path, encryption, created_at, updated_at
+		FROM repositories ORDER BY remote, base_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*Repository
+	for rows.Next() {
+		var r Repository
+		if err := rows.Scan(&r.UUID, &r.Remote, &r.BasePath, &r.Encryption, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &r)
+	}
+	return out, rows.Err()
+}
