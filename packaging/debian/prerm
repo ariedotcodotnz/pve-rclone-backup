@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -e
 
-if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
-    systemctl stop pve-rclone-backupd.service || true
+if [ "$1" = remove ]; then
+    # vzdump must not be left pointing at a hook script that is going away.
+    pve-rclone-backup hook uninstall --yes >/dev/null 2>&1 || true
+    if [ -d /run/systemd/system ]; then
+        systemctl stop pve-rclone-backupd.service || true
+    fi
 fi
 
 exit 0

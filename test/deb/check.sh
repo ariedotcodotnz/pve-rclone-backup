@@ -33,11 +33,26 @@ mkdir -p /run/pve-rclone-backup
 pid=$!
 for _ in $(seq 50); do [ -S /run/pve-rclone-backup/api.sock ] && break; sleep 0.1; done
 pve-rclone-backup status >/dev/null || { cat /tmp/daemon.log; fail "daemon not serving"; }
+# The vzdump hook reports archives and keeps a chained hook's arguments
+# and exit status.
+printf '#!/bin/sh\necho "$@" > /tmp/chained.args\nexit 3\n' > /usr/local/bin/my-hook && chmod +x /usr/local/bin/my-hook
+printf 'script: /usr/local/bin/my-hook\n' > /etc/vzdump.conf
+pve-rclone-backup hook install --chain --yes >/dev/null || fail "hook install"
+grep -q '^script: /usr/share/pve-rclone-backup/vzdump-hook$' /etc/vzdump.conf || fail "hook not set"
+status=0
+TARGET=/var/lib/vz/dump/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst /usr/share/pve-rclone-backup/vzdump-hook backup-end snapshot 100 || status=$?
+[ "$status" = 3 ] || fail "chained exit status $status"
+[ "$(cat /tmp/chained.args)" = "backup-end snapshot 100" ] || fail "chained arguments"
 kill $pid; wait $pid || fail "daemon exit status $?"
+# Without the daemon the hook still never delays the job for long.
+start=$(date +%s)
+TARGET=/x.vma.zst /usr/share/pve-rclone-backup/vzdump-hook backup-end snapshot 100 || true
+[ $(( $(date +%s) - start )) -le 6 ] || fail "hook blocked without the daemon"
 [ -d /var/lib/pve-rclone-backup ] || fail "no state directory"
 
 dpkg -r pve-rclone-backup >/dev/null
 [ ! -e /usr/sbin/pve-rclone-backupd ] || fail "not removed"
+grep -q '^script: /usr/local/bin/my-hook$' /etc/vzdump.conf || fail "hook left in vzdump.conf after removal"
 [ -d /var/lib/pve-rclone-backup ] || fail "state removed before purge"
 dpkg -P pve-rclone-backup >/dev/null
 [ ! -e /var/lib/pve-rclone-backup ] || fail "state not purged"

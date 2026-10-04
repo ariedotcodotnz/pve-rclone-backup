@@ -15,6 +15,7 @@ pkg="$stage/pkg"
 install -D -m 0755 "$bindir/pve-rclone-backupd" "$pkg/usr/sbin/pve-rclone-backupd"
 install -D -m 0755 "$bindir/pve-rclone-backup" "$pkg/usr/bin/pve-rclone-backup"
 install -D -m 0644 "$root/systemd/pve-rclone-backupd.service" "$pkg/usr/lib/systemd/system/pve-rclone-backupd.service"
+install -D -m 0755 "$root/packaging/share/vzdump-hook" "$pkg/usr/share/pve-rclone-backup/vzdump-hook"
 
 perl="$pkg/usr/share/perl5/PVE"
 install -D -m 0644 "$root/perl/PVE/Storage/Custom/RcloneBackupPlugin.pm" "$perl/Storage/Custom/RcloneBackupPlugin.pm"

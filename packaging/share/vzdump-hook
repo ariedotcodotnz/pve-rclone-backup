@@ -1,0 +1,22 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# vzdump hook of pve-rclone-backup (installed with 'pve-rclone-backup hook
+# install'). It reports each finished archive to the daemon, which also
+# finds archives without it, and then runs the hook script that was
+# configured before, if any, with the same arguments and exit status.
+phase=$1
+
+if [ "$phase" = backup-end ] && [ -n "${TARGET:-}" ]; then
+    # Never delay or fail the backup job because of the daemon.
+    timeout 5 /usr/bin/pve-rclone-backup hook notify --phase "$phase" --path "$TARGET" >/dev/null 2>&1 || true
+fi
+
+chain=/var/lib/pve-rclone-backup/vzdump-hook.chain
+if [ -r "$chain" ]; then
+    previous=$(cat "$chain")
+    if [ -n "$previous" ] && [ -x "$previous" ]; then
+        exec "$previous" "$@"
+    fi
+fi
+exit 0

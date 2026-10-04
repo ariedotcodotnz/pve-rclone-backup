@@ -275,3 +275,49 @@ func TestSecretsStayOffTheCommandLine(t *testing.T) {
 		t.Fatalf("queue show printed %q", r.out)
 	}
 }
+
+func TestVzdumpHook(t *testing.T) {
+	dir := t.TempDir()
+	vzdumpConf, hookChain = filepath.Join(dir, "vzdump.conf"), filepath.Join(dir, "state", "vzdump-hook.chain")
+	_ = os.WriteFile(vzdumpConf, []byte("# vzdump defaults\nbwlimit: 1000\nscript: /usr/local/bin/my-hook\n"), 0o600)
+	var notified apiv1.DiscoveryNotify
+	socket := fakeDaemon(t, map[string]api.HandlerFunc{
+		"POST /v1/discovery/notify": func(w http.ResponseWriter, r *http.Request) error {
+			_ = api.DecodeJSON(r, &notified)
+			return api.WriteJSON(w, 202, struct{}{})
+		},
+	})
+	conf := func() string { b, _ := os.ReadFile(vzdumpConf); return string(b) }
+
+	if r := run(t, socket, nil, false, "hook", "status"); !strings.Contains(r.out, "uses the hook /usr/local/bin/my-hook") {
+		t.Fatalf("status: %s", r.out)
+	}
+	if r := run(t, socket, nil, false, "hook", "install", "--yes"); r.code == 0 || !strings.Contains(r.err, "--chain") {
+		t.Fatalf("install over another hook (%d): %s", r.code, r.err)
+	}
+	if r := run(t, socket, nil, false, "hook", "install", "--chain"); r.code != ExitUsage {
+		t.Fatalf("install without confirmation: %d", r.code)
+	}
+	if r := run(t, socket, nil, false, "hook", "install", "--chain", "--yes"); r.code != 0 {
+		t.Fatalf("install: %s", r.err)
+	}
+	if c := conf(); !strings.Contains(c, "bwlimit: 1000") || !strings.Contains(c, "script: "+hookScript) || strings.Contains(c, "my-hook") {
+		t.Fatalf("vzdump.conf after install:\n%s", c)
+	}
+	if r := run(t, socket, nil, false, "hook", "status"); !strings.Contains(r.out, "runs the previous hook /usr/local/bin/my-hook") {
+		t.Fatalf("status: %s", r.out)
+	}
+	if r := run(t, socket, nil, false, "hook", "notify", "--phase", "backup-end", "--path", "/var/lib/vz/dump/vzdump-qemu-100-x.vma.zst"); r.code != 0 ||
+		notified.Path != "/var/lib/vz/dump/vzdump-qemu-100-x.vma.zst" || notified.Phase != "backup-end" {
+		t.Fatalf("notify (%d): %+v %s", r.code, notified, r.err)
+	}
+	if r := run(t, socket, nil, false, "hook", "uninstall", "--yes"); r.code != 0 || !strings.Contains(r.out, "my-hook is the hook again") {
+		t.Fatalf("uninstall: %s%s", r.out, r.err)
+	}
+	if c := conf(); !strings.Contains(c, "script: /usr/local/bin/my-hook") || strings.Contains(c, hookScript) {
+		t.Fatalf("vzdump.conf after uninstall:\n%s", c)
+	}
+	if _, err := os.Stat(hookChain); !os.IsNotExist(err) {
+		t.Fatal("chain file left")
+	}
+}
