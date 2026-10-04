@@ -285,4 +285,37 @@ func TestCLIEndToEnd(t *testing.T) {
 	if r := c.run("recovery-kit", "status"); r.code != 0 || strings.Count(r.out, "yes") < 2 {
 		t.Fatalf("kit status: %s", r.out)
 	}
+
+	// Disaster recovery on a fresh installation with the first kit.
+	dr := startCluster(t)
+	r = dr.run("recover", kitFile)
+	if r.code != 0 || !strings.Contains(r.out, "keys imported") || !strings.Contains(r.out, "Storage offsite-dr added") {
+		t.Fatalf("recover (%d): %s%s", r.code, r.out, r.err)
+	}
+	dr.mu.Lock()
+	if got := strings.Join(dr.pveshLog[0], " "); !strings.Contains(got, "--storage offsite-dr") || strings.Contains(got, "replicate-from") {
+		t.Fatalf("DR pvesh = %s", got)
+	}
+	dr.mu.Unlock()
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		r := dr.run("backup", "list", "--storage", "offsite-dr")
+		if strings.Contains(r.out, "offsite-dr:backup/vzdump-qemu-100-2026_10_04-02_00_01") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("DR catalogue: %s%s\n%s", r.out, r.err, dr.run("storage", "show", "offsite-dr").out)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if r := dr.run("recover", kitFile); r.code != 0 || !strings.Contains(r.out, "exists already") {
+		t.Fatalf("second recover (%d): %s%s", r.code, r.out, r.err)
+	}
+	r = dr.run("storage", "init", "xx", "--remote", loc.Remote, "--source", "nosuch", "--read-only")
+	if r.code == 0 || !strings.Contains(r.err, `no source "nosuch"`) {
+		t.Fatalf("read-only init of a missing source (%d): %s", r.code, r.err)
+	}
+	if r := dr.run("storage", "init", "xx", "--remote", loc.Remote, "--source", "homelab", "--read-only", "--replicate-from", "backups"); r.code != ExitUsage {
+		t.Fatalf("read-only with replication: %d", r.code)
+	}
 }

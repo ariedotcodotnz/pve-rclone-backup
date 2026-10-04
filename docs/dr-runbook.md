@@ -16,7 +16,7 @@ apt install ./pve-rclone-backup_<version>_amd64.deb
 systemctl status pve-rclone-backupd
 ```
 
-## 2. Import the recovery kit
+## 2. Recover the storages
 
 Check the kit first. This works without the daemon:
 
@@ -24,41 +24,37 @@ Check the kit first. This works without the daemon:
 pve-rclone-backup recovery-kit show /root/offsite-recovery-kit.txt --passphrase-file /root/kit-passphrase
 ```
 
-Then import the keys. Add `--import-token` to also create the transport remote from credentials stored
-in the kit:
+Then let `recover` import the keys and add a read-only storage for each repository in the kit.
+Each storage gets the original storage's name plus `-dr`. Add `--import-token` to also create the
+transport remote from credentials stored in the kit:
 
 ```sh
-pve-rclone-backup recovery-kit import /root/offsite-recovery-kit.txt \
+pve-rclone-backup recover /root/offsite-recovery-kit.txt \
     --passphrase-file /root/kit-passphrase --import-token
 ```
 
 If the kit holds no credentials, or they have expired (OneDrive refresh tokens expire after 90 days of
-non-use), connect the account again under **the same remote name** that the kit shows:
+non-use), connect the account again under **the same remote name** that the kit shows, then run
+`recover` again:
 
 ```sh
 pve-rclone-backup remote add onedrive-main     # or: remote reconnect onedrive-main
 ```
 
-Then confirm that the keys open the repository:
+`recovery-kit verify` confirms that the keys open the repository.
+
+## 3. Check the recovered storage
+
+The storage is read-only: nothing is uploaded into the lost installation's namespace. Its catalogue
+is rebuilt from the backups' manifests in the cloud, so no database from the old host is needed.
 
 ```sh
-pve-rclone-backup recovery-kit verify /root/offsite-recovery-kit.txt --passphrase-file /root/kit-passphrase
-```
-
-## 3. Add the storage, read-only
-
-Add a storage for the lost installation's source name, without `--replicate-from`, so nothing is
-uploaded into it from here. `storage init` finds the existing repository and adopts it. Nothing is
-overwritten.
-
-```sh
-pve-rclone-backup storage init offsite-dr --remote onedrive-main --path pve-backups --source homelab
 pve-rclone-backup storage show offsite-dr
 pve-rclone-backup backup list --storage offsite-dr
 ```
 
-The catalogue is rebuilt from the backups' manifests in the cloud, so no database from the old host
-is needed. Offsite backups also appear in the PVE GUI under the storage `offsite-dr`.
+The offsite backups also appear in the PVE GUI under the storage `offsite-dr`. To add such a storage
+by hand, use `pve-rclone-backup storage init offsite-dr --remote onedrive-main --source homelab --read-only`.
 
 ## 4. Restore
 

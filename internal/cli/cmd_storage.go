@@ -117,13 +117,58 @@ func (f *kitFlags) register(cmd *cobra.Command, fileUsage string) {
 	cmd.Flags().BoolVar(&f.force, "force", false, "overwrite an existing kit file")
 }
 
+// initOpts configures storage initialization.
+type initOpts struct {
+	remote, path, source, encryption string
+	replicateFrom                    []string
+	adoptSource, readOnly, noPVESH   bool
+	kf                               kitFlags
+}
+
+// initStorage creates or adopts a storage's repository, has its recovery
+// kit exported and confirmed when needed, and adds the storage to PVE.
+func (a *App) initStorage(ctx context.Context, id string, o initOpts) error {
+	if o.readOnly && len(o.replicateFrom) > 0 {
+		return usagef("a read-only storage does not replicate")
+	}
+	var res apiv1.StorageInitResponse
+	if err := a.do(ctx, http.MethodPost, "/v1/storages/"+url.PathEscape(id)+"/init", apiv1.StorageInitRequest{
+		Remote: o.remote, Path: o.path, Source: o.source, Encryption: o.encryption, AdoptSource: o.adoptSource,
+		ReadOnly: o.readOnly}, &res); err != nil {
+		return err
+	}
+	verb := "Created"
+	if !res.Created {
+		verb = "Adopted existing"
+	}
+	fmt.Fprintf(a.Out, "%s repository %s at %s:%s.\n", verb, res.RepoUUID, o.remote, o.path)
+	if res.KitRequired {
+		target := apiv1.KitTarget{Storage: id, Remote: o.remote, Path: o.path, Source: o.source}
+		if o.kf.file == "" {
+			o.kf.file = id + "-recovery-kit.txt"
+		}
+		if err := a.exportAndConfirm(ctx, []apiv1.KitTarget{target}, o.kf); err != nil {
+			return err
+		}
+	}
+	pv := []string{"create", "/storage", "--storage", id, "--type", "rclone-backup", "--rclone-remote", o.remote,
+		"--rclone-path", o.path, "--rclone-source", o.source, "--rclone-encryption", res.Encryption, "--content", "backup"}
+	if len(o.replicateFrom) > 0 {
+		pv = append(pv, "--rclone-replicate-from", strings.Join(o.replicateFrom, ","))
+	}
+	if o.noPVESH {
+		fmt.Fprintln(a.Out, "Add the storage with:")
+		return a.pvesh(ctx, true, pv...)
+	}
+	if err := a.pvesh(ctx, false, pv...); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.Out, "Storage %s added.\n", id)
+	return nil
+}
+
 func (a *App) storageInitCommand() *cobra.Command {
-	var (
-		remote, path, source, encryption string
-		replicateFrom                    []string
-		adoptSource, noPVESH             bool
-		kf                               kitFlags
-	)
+	var o initOpts
 	cmd := &cobra.Command{
 		Use:   "init <storage>",
 		Short: "Create the repository, export its recovery kit and add the storage to PVE",
@@ -131,58 +176,28 @@ func (a *App) storageInitCommand() *cobra.Command {
 kit, then add the storage to /etc/pve/storage.cfg through the PVE API.
 
 The recovery kit holds the encryption keys. Without it, encrypted backups cannot be restored
-after the loss of this host; replication only starts once the kit is confirmed.`,
+after the loss of this host; replication only starts once the kit is confirmed.
+
+With --read-only, an existing repository is bound to browse and restore the backups of another
+installation (its --source) without replicating into it.`,
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			id := args[0]
-			if remote == "" || source == "" {
+			if o.remote == "" || o.source == "" {
 				return usagef("--remote and --source are required")
 			}
-			var res apiv1.StorageInitResponse
-			if err := a.do(ctx, http.MethodPost, "/v1/storages/"+url.PathEscape(id)+"/init", apiv1.StorageInitRequest{
-				Remote: remote, Path: path, Source: source, Encryption: encryption, AdoptSource: adoptSource}, &res); err != nil {
-				return err
-			}
-			verb := "Created"
-			if !res.Created {
-				verb = "Adopted existing"
-			}
-			fmt.Fprintf(a.Out, "%s repository %s at %s:%s.\n", verb, res.RepoUUID, remote, path)
-			if res.KitRequired {
-				target := apiv1.KitTarget{Storage: id, Remote: remote, Path: path, Source: source}
-				if kf.file == "" {
-					kf.file = id + "-recovery-kit.txt"
-				}
-				if err := a.exportAndConfirm(ctx, []apiv1.KitTarget{target}, kf); err != nil {
-					return err
-				}
-			}
-			pv := []string{"create", "/storage", "--storage", id, "--type", "rclone-backup", "--rclone-remote", remote,
-				"--rclone-path", path, "--rclone-source", source, "--rclone-encryption", res.Encryption, "--content", "backup"}
-			if len(replicateFrom) > 0 {
-				pv = append(pv, "--rclone-replicate-from", strings.Join(replicateFrom, ","))
-			}
-			if noPVESH {
-				fmt.Fprintln(a.Out, "Add the storage with:")
-				return a.pvesh(ctx, true, pv...)
-			}
-			if err := a.pvesh(ctx, false, pv...); err != nil {
-				return err
-			}
-			fmt.Fprintf(a.Out, "Storage %s added.\n", id)
-			return nil
+			return a.initStorage(cmd.Context(), args[0], o)
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&remote, "remote", "", "transport remote (see 'remote list')")
-	f.StringVar(&path, "path", "pve-backups", "repository path inside the remote")
-	f.StringVar(&source, "source", "", "name of this installation inside the repository (e.g. the cluster name)")
-	f.StringVar(&encryption, "encryption", "crypt", "crypt or none")
-	f.StringSliceVar(&replicateFrom, "replicate-from", nil, "local backup storages to replicate (comma separated)")
-	f.BoolVar(&adoptSource, "adopt-source", false, "take over a source name registered by another installation (disaster recovery)")
-	f.BoolVar(&noPVESH, "no-pvesh", false, "print the pvesh command instead of running it")
-	kf.register(cmd, "where to write the recovery kit (default <storage>-recovery-kit.txt)")
+	f.StringVar(&o.remote, "remote", "", "transport remote (see 'remote list')")
+	f.StringVar(&o.path, "path", "pve-backups", "repository path inside the remote")
+	f.StringVar(&o.source, "source", "", "name of this installation inside the repository (e.g. the cluster name)")
+	f.StringVar(&o.encryption, "encryption", "crypt", "crypt or none")
+	f.StringSliceVar(&o.replicateFrom, "replicate-from", nil, "local backup storages to replicate (comma separated)")
+	f.BoolVar(&o.adoptSource, "adopt-source", false, "take over a source name registered by another installation (disaster recovery)")
+	f.BoolVar(&o.readOnly, "read-only", false, "only browse and restore an existing repository's backups of --source")
+	f.BoolVar(&o.noPVESH, "no-pvesh", false, "print the pvesh command instead of running it")
+	o.kf.register(cmd, "where to write the recovery kit (default <storage>-recovery-kit.txt)")
 	return cmd
 }
 

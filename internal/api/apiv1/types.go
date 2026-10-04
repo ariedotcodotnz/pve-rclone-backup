@@ -378,6 +378,9 @@ type StorageInitRequest struct {
 	// AdoptSource takes over a source name registered by another
 	// installation (disaster recovery).
 	AdoptSource bool `json:"adopt_source,omitempty"`
+	// ReadOnly binds an existing repository to browse and restore another
+	// installation's backups, without registering the source.
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 // StorageInitResponse reports the repository a storage is bound to.

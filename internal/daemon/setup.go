@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	rconfig "github.com/rclone/rclone/fs/config"
@@ -98,6 +99,9 @@ func (d *Daemon) initStorage(w http.ResponseWriter, r *http.Request) error {
 	if req.Encryption != "crypt" && req.Encryption != "none" {
 		return api.Invalid("encryption must be crypt or none")
 	}
+	if req.ReadOnly && req.AdoptSource {
+		return api.Invalid("a read-only storage does not adopt the source")
+	}
 	if !layout.ValidSource(req.Source) {
 		return api.Invalid("invalid source name %q (lower case letters, digits and '-', at most 32)", req.Source)
 	}
@@ -120,6 +124,8 @@ func (d *Daemon) initStorage(w http.ResponseWriter, r *http.Request) error {
 	var rp *repo.Repo
 	marker, _, err := repo.ReadMarker(ctx, loc)
 	switch {
+	case errors.Is(err, repo.ErrNotInitialized) && req.ReadOnly:
+		return preconditionf("there is no repository at %s:%s", loc.Remote, loc.Path)
 	case errors.Is(err, repo.ErrNotInitialized):
 		var keys *secrets.RepoKeys
 		uuid := repo.NewUUID()
@@ -153,7 +159,16 @@ func (d *Daemon) initStorage(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	resp.RepoUUID = rp.UUID()
-	if err := rp.RegisterSource(ctx, req.Source, ident.UUID, clusterName, req.AdoptSource); err != nil {
+	if req.ReadOnly {
+		sources, err := rp.Sources(ctx)
+		if err != nil {
+			return transportError(err)
+		}
+		if !slices.Contains(sources, req.Source) {
+			return preconditionf("the repository at %s:%s has no source %q (it has: %s)", loc.Remote, loc.Path, req.Source,
+				strings.Join(sources, ", "))
+		}
+	} else if err := rp.RegisterSource(ctx, req.Source, ident.UUID, clusterName, req.AdoptSource); err != nil {
 		if errors.Is(err, repo.ErrSourceTaken) {
 			return conflictf("%v; choose another source name, or adopt it if this installation replaces the old one", err)
 		}
@@ -162,7 +177,7 @@ func (d *Daemon) initStorage(w http.ResponseWriter, r *http.Request) error {
 	if err := d.store.PutRepository(ctx, &store.Repository{UUID: rp.UUID(), Remote: loc.Remote, BasePath: loc.Path, Encryption: req.Encryption}); err != nil {
 		return err
 	}
-	resp.KitRequired = req.Encryption == "crypt" && !d.ledger.Confirmed(rp.UUID())
+	resp.KitRequired = !req.ReadOnly && req.Encryption == "crypt" && !d.ledger.Confirmed(rp.UUID())
 	d.log.Info("repository ready for storage", "storage", id, "repo", rp.UUID(), "created", resp.Created,
 		"remote", loc.Remote, "path", loc.Path, "source", req.Source)
 	return api.WriteJSON(w, http.StatusOK, resp)
