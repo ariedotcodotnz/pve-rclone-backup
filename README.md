@@ -3,8 +3,9 @@
 Offsite replication of Proxmox VE backups to rclone-supported cloud storage.
 Microsoft OneDrive Personal is the first target.
 
-> **Status: pre-alpha, under active development.** Replication, the daemon API and the CLI work;
-> there is no Debian package yet, and restores, retention and the TUI are still being built.
+> **Status: pre-alpha, under active development.** Replication, verification, retention, fetch and
+> restore work through the CLI and the TUI. There is no Debian package yet, and it has not been tested on a
+> real PVE host or against a real OneDrive account.
 
 ## How it works
 
@@ -49,6 +50,15 @@ These commands run as root on a PVE node with the daemon running.
    pve-rclone-backup backup list
    ```
 
+4. Restore when needed: stream a VM straight into `qmrestore`, stage a container for `pct restore`,
+   or fetch an offsite backup into a local storage so PVE can restore it natively:
+
+   ```sh
+   pve-rclone-backup restore offsite:backup/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst --vmid 900
+   pve-rclone-backup backup fetch offsite:backup/vzdump-lxc-200-2026_10_04-02_00_01.tar.zst --to-storage local
+   ```
+
+`pve-rclone-backup tui` offers the same in an interactive terminal interface, and
 `pve-rclone-backup doctor` checks the installation. Every command accepts `-o json`.
 
 ## Building

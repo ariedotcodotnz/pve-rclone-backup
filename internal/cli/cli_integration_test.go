@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/daemon"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/doctor"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/recoverykit"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
@@ -252,9 +253,9 @@ func TestCLIEndToEnd(t *testing.T) {
 
 	plugin := filepath.Join(t.TempDir(), "RcloneBackupPlugin.pm")
 	_ = os.WriteFile(plugin, nil, 0o600)
-	oldPath := pluginPath
-	pluginPath = plugin
-	defer func() { pluginPath = oldPath }()
+	oldPath := doctor.PluginPath
+	doctor.PluginPath = plugin
+	defer func() { doctor.PluginPath = oldPath }()
 	if r := c.run("doctor"); r.code != 0 {
 		t.Fatalf("doctor (%d): %s%s", r.code, r.out, r.err)
 	}

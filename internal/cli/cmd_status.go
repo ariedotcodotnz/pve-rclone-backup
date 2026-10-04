@@ -3,15 +3,14 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/doctor"
 )
 
 func (a *App) statusCommand() *cobra.Command {
@@ -81,104 +80,28 @@ func kitString(s apiv1.Storage) string {
 	return "MISSING"
 }
 
-// pluginPath is where PVE loads the storage plugin from.
-var pluginPath = "/usr/share/perl5/PVE/Storage/Custom/RcloneBackupPlugin.pm"
-
-type check struct {
-	level, subject, message string
-}
-
 func (a *App) doctorCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Check the installation and report problems",
 		Args:  exactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			checks := a.doctor(cmd.Context())
-			bad := false
-			for _, c := range checks {
-				bad = bad || c.level != "ok"
-			}
+			checks := doctor.Run(cmd.Context(), a.api())
 			if a.Output == "json" {
-				out := make([]map[string]string, 0, len(checks))
-				for _, c := range checks {
-					out = append(out, map[string]string{"level": c.level, "subject": c.subject, "message": c.message})
-				}
-				if err := a.json(out); err != nil {
+				if err := a.json(checks); err != nil {
 					return err
 				}
 			} else {
 				rows := make([][]string, 0, len(checks))
 				for _, c := range checks {
-					rows = append(rows, []string{map[string]string{"ok": "OK", "warn": "WARN", "fail": "FAIL"}[c.level], c.subject, c.message})
+					rows = append(rows, []string{map[string]string{doctor.OK: "OK", doctor.Warn: "WARN", doctor.Fail: "FAIL"}[c.Level], c.Subject, c.Message})
 				}
 				a.table([]string{"", "CHECK", "DETAIL"}, rows)
 			}
-			if bad {
+			if !doctor.Healthy(checks) {
 				return errFindings
 			}
 			return nil
 		},
 	}
-}
-
-func (a *App) doctor(ctx context.Context) []check {
-	var out []check
-	add := func(level, subject, format string, args ...any) {
-		out = append(out, check{level, subject, fmt.Sprintf(format, args...)})
-	}
-	if _, err := os.Stat(pluginPath); err != nil {
-		add("warn", "PVE plugin", "%s not found: PVE cannot list offsite backups", pluginPath)
-	} else {
-		add("ok", "PVE plugin", "installed")
-	}
-	v, err := a.api().Version(ctx)
-	if err != nil {
-		add("fail", "daemon", "%v", err)
-		return out
-	}
-	if v.APIMinClient > apiv1.Revision || v.API < apiv1.Revision {
-		add("fail", "daemon", "API %d does not support this CLI (API %d)", v.API, apiv1.Revision)
-	} else {
-		add("ok", "daemon", "%s (rclone %s) on %s", v.Daemon, v.Rclone, v.Node)
-	}
-	if st, err := a.api().Status(ctx); err == nil {
-		for _, p := range st.Problems {
-			add("warn", "daemon", "%s", p)
-		}
-		for _, al := range st.Alerts {
-			add(map[bool]string{true: "fail", false: "warn"}[al.Severity == "error"], "alert "+al.ID, "%s", al.Message)
-		}
-		if st.Jobs.Failed > 0 {
-			add("warn", "queue", "%d failed uploads; see 'pve-rclone-backup queue list --state failed'", st.Jobs.Failed)
-		}
-	}
-	var storages []apiv1.Storage
-	if err := a.do(ctx, http.MethodGet, "/v1/storages", nil, &storages); err == nil {
-		for _, s := range storages {
-			switch {
-			case !s.Enabled:
-			case s.Health != apiv1.HealthOK:
-				add("fail", "storage "+s.ID, "%s: %s", s.Health, dash(s.HealthDetail))
-			case s.Encryption == "crypt" && !s.KitConfirmed:
-				add("fail", "storage "+s.ID, "no confirmed recovery kit; run 'pve-rclone-backup recovery-kit export --storage %s'", s.ID)
-			default:
-				add("ok", "storage "+s.ID, "healthy")
-			}
-		}
-	}
-	var remotes []apiv1.Remote
-	if err := a.do(ctx, http.MethodGet, "/v1/remotes", nil, &remotes); err == nil {
-		for _, r := range remotes {
-			if !r.Supported || len(r.Storages) == 0 {
-				continue
-			}
-			if r.Type == "onedrive" && !r.Authorized {
-				add("fail", "remote "+r.Name, "not authorized; run 'pve-rclone-backup remote reconnect %s'", r.Name)
-			} else {
-				add("ok", "remote "+r.Name, "%s", r.Type)
-			}
-		}
-	}
-	return out
 }

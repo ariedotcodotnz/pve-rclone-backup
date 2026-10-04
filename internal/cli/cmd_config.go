@@ -7,7 +7,23 @@ import (
 	"net/http"
 
 	"github.com/spf13/cobra"
+
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/tui"
 )
+
+func (a *App) tuiCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Interactive terminal interface",
+		Args:  exactArgs(0),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !a.Interactive {
+				return usagef("the TUI needs a terminal")
+			}
+			return tui.Run(cmd.Context(), tui.Options{Client: a.api(), PVESH: a.PVESH})
+		},
+	}
+}
 
 func (a *App) configCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "config", Short: "Configuration schemas"}
