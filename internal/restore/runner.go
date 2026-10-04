@@ -177,13 +177,26 @@ type source struct {
 	b   *store.Backup
 }
 
-// basename is the archive name without extension (the log's name).
-func (s *source) basename() string {
-	a, err := layout.ParseArchiveName(s.m.Archive.Filename)
-	if err != nil {
-		return s.m.Archive.Filename
+// archiveName returns the manifest's archive file name after checking it
+// once more: it becomes a local path. Manifests are validated when read,
+// so a failure here means a bug, never a reason to fall back.
+func (s *source) archiveName() (name, base string, err error) {
+	name = s.m.Archive.Filename
+	a, err := layout.ParseArchiveName(name)
+	if err != nil || filepath.Base(name) != name || strings.HasPrefix(name, ".") || strings.Contains(name, "..") ||
+		a.VMID != s.m.Backup.VMID || a.TSLabel != s.m.Backup.TSLabel {
+		return "", "", jobs.Permanent(fmt.Errorf("refusing archive file name %q", name))
 	}
-	return strings.TrimSuffix(s.m.Archive.Filename, "."+a.Ext)
+	return name, strings.TrimSuffix(name, "."+a.Ext), nil
+}
+
+// inside joins name to dir and checks that the result stays in dir.
+func inside(dir, name string) (string, error) {
+	p := filepath.Join(dir, name)
+	if filepath.Dir(p) != filepath.Clean(dir) {
+		return "", jobs.Permanent(fmt.Errorf("refusing path %q outside %s", name, dir))
+	}
+	return p, nil
 }
 
 // progressWriter records transfer progress in the job.
@@ -260,7 +273,14 @@ func (r *Runner) fetch(ctx context.Context, t *jobs.Task, s *source, p FetchPara
 	case dst.Problem != "":
 		return jobs.Permanent(fmt.Errorf("storage %s: %s", p.TargetStorage, dst.Problem))
 	}
-	final := filepath.Join(dst.Dir, s.m.Archive.Filename)
+	name, basename, err := s.archiveName()
+	if err != nil {
+		return err
+	}
+	final, err := inside(dst.Dir, name)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Lstat(final); err == nil {
 		return jobs.Permanent(fmt.Errorf("%s already exists", final))
 	}
@@ -274,7 +294,10 @@ func (r *Runner) fetch(ctx context.Context, t *jobs.Task, s *source, p FetchPara
 	if err := t.Advance(ctx, jobs.StateTransferring, "downloading to "+final, nil); err != nil {
 		return err
 	}
-	tmp := filepath.Join(dst.Dir, fmt.Sprintf(".%s.fetch-%d", s.m.Archive.Filename, t.Job().ID))
+	tmp, err := inside(dst.Dir, fmt.Sprintf(".%s.fetch-%d", name, t.Job().ID))
+	if err != nil {
+		return err
+	}
 	if fi, err := os.Lstat(tmp); err == nil && fi.Mode().IsRegular() {
 		_ = os.Remove(tmp) // an interrupted earlier attempt
 	}
@@ -293,7 +316,7 @@ func (r *Runner) fetch(ctx context.Context, t *jobs.Task, s *source, p FetchPara
 	if err := t.Advance(ctx, jobs.StateApplying, "placing the archive", nil); err != nil {
 		return err
 	}
-	base := filepath.Join(dst.Dir, s.basename())
+	base := filepath.Join(dst.Dir, basename)
 	if s.m.Sidecars.Log != nil {
 		if data, err := s.tgt.ReadAll(ctx, s.id.Path(layout.LogName), 16<<20); err == nil {
 			_ = writeNew(base+".log", data)
@@ -502,7 +525,14 @@ func (r *Runner) staged(ctx context.Context, t *jobs.Task, s *source, p RestoreP
 	if err := t.Advance(ctx, jobs.StateTransferring, "staging the archive in "+dir, nil); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, s.m.Archive.Filename)
+	name, _, err := s.archiveName()
+	if err != nil {
+		return err
+	}
+	path, err := inside(dir, name)
+	if err != nil {
+		return err
+	}
 	if err := r.download(ctx, t, s, path); err != nil {
 		return err
 	}
