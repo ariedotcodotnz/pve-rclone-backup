@@ -23,6 +23,8 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/config"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/discovery"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cluster"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/replicate"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/storages"
@@ -147,8 +149,22 @@ func Run(ctx context.Context, opts Options) error {
 			}
 		},
 	})
+	runner := replicate.New(replicate.Options{
+		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Repos: d.storages.Repo,
+		Identity: func() (*replicate.Identity, string, error) {
+			id, err := replicate.LoadIdentity(opts.PVEDir)
+			members, _ := cluster.ReadMembers(opts.PVEDir, opts.Node)
+			return id, members.Cluster, err
+		},
+		OnCommit: func(b *store.Backup) { d.api.Events().Publish("backup.added", backupView(b)) },
+	})
 	d.scheduler = jobs.New(jobs.Options{
 		Log: d.log, Store: st, Node: opts.Node, Workers: ncfg.UploadWorkers, Targets: d.storages.Targets,
+		Runner: runner,
+		Ready: func(id string) error {
+			_, _, err := d.storages.Repo(id)
+			return err
+		},
 		OnUpdate: func(u apiv1.JobUpdate) { d.api.Events().Publish("job.updated", u) },
 	})
 	if err := d.storages.Reload(ctx); err != nil {
@@ -177,6 +193,7 @@ func Run(ctx context.Context, opts Options) error {
 	}()
 	workers.Go(func() { d.storages.Run(serveCtx) })
 	workers.Go(func() { d.discovery.Run(serveCtx) })
+	workers.Go(func() { d.scheduler.Run(serveCtx) })
 
 	if opts.Ready != nil {
 		opts.Ready()

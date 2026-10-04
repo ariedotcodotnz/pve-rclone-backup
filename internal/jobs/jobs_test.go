@@ -388,3 +388,50 @@ func complete2(ctx context.Context, task *Task) error {
 	}
 	return nil
 }
+
+func TestPostponeAndPermanent(t *testing.T) {
+	h := newHarness(t, 2, target("a", "r1", 2))
+	until := time.Now().Add(10 * time.Minute).Truncate(time.Second)
+	var mu sync.Mutex
+	outcome := map[int64]error{}
+	h.setScript(func(ctx context.Context, task *Task) error {
+		mu.Lock()
+		defer mu.Unlock()
+		return outcome[task.Job().ID]
+	})
+	settling := h.add("a", 1)
+	broken := h.add("a", 2)
+	mu.Lock()
+	outcome[settling] = Postpone(until, "waiting for vzdump to finish")
+	outcome[broken] = Permanent(errors.New("source name registered by another installation"))
+	mu.Unlock()
+	h.start()
+	j := h.waitState(settling, StateRetryWait)
+	if j.Attempts != 0 || j.ErrorClass != "" || j.LastError != "waiting for vzdump to finish" || *j.NextAttemptAt != until.Unix() {
+		t.Errorf("postponed job = %+v", j)
+	}
+	if j := h.waitState(broken, StateFailed); j.ErrorClass != "permanent" || j.FinishedAt == nil {
+		t.Errorf("permanent failure = %+v", j)
+	}
+}
+
+func TestNotReadyStoragesWait(t *testing.T) {
+	h := newHarness(t, 1, target("a", "r1", 1))
+	var ready sync.Map
+	h.s.opts.Ready = func(id string) error {
+		if _, ok := ready.Load(id); ok {
+			return nil
+		}
+		return errors.New("repository not open")
+	}
+	h.setScript(complete)
+	id := h.add("a", 1)
+	h.start()
+	time.Sleep(100 * time.Millisecond)
+	if j, _ := h.st.GetJob(t.Context(), id); j.State != StateQueued {
+		t.Fatalf("job of a storage that is not ready is %s", j.State)
+	}
+	ready.Store("a", true)
+	h.s.Wake()
+	h.waitState(id, StateComplete)
+}

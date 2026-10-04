@@ -30,10 +30,11 @@ linters:
       - path: internal/store/
         linters: [gosec]
         text: G202
-      # Tests plant fake credentials and convert the test process uid.
+      # Tests plant fake credentials, convert the test process uid and
+      # generate deterministic pseudo-random data.
       - path: _test\.go
         linters: [gosec]
-        text: "G101|G115|G302|G304|G703"
+        text: "G101|G115|G302|G304|G404|G703"
       # Test helpers generate deterministic pseudo-random archives.
       - path: internal/repo/repotest/
         linters: [gosec]

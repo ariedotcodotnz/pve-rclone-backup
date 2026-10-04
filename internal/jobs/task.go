@@ -23,6 +23,10 @@ type Task struct {
 	published time.Time
 }
 
+// Store returns the state store, for job data beyond the job row
+// (segments).
+func (t *Task) Store() *store.Store { return t.s.opts.Store }
+
 // Job returns a snapshot of the job.
 func (t *Task) Job() store.Job {
 	t.mu.Lock()
@@ -66,6 +70,23 @@ func (t *Task) Update(ctx context.Context, mutate func(*store.Job)) error {
 		j.State = state
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	t.job = j
+	if now := t.s.opts.Now(); now.Sub(t.published) >= progressInterval {
+		t.published = now
+		t.s.publish(j)
+	}
+	return nil
+}
+
+// RecordSegment stores a segment and the job's progress after it
+// atomically. Its events are rate limited like Update's.
+func (t *Task) RecordSegment(ctx context.Context, seg store.Segment, nextSegment int, hashState []byte, progress int64) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	j, err := t.s.opts.Store.RecordSegment(ctx, seg, t.job.State, nextSegment, hashState, progress)
 	if err != nil {
 		return err
 	}

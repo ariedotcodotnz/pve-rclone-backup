@@ -22,6 +22,26 @@ import (
 // changed; such jobs end as source_lost.
 var ErrSourceLost = errors.New("source archive vanished or changed")
 
+// ErrPermanent marks failures that retrying cannot fix; such jobs fail.
+var ErrPermanent = errors.New("permanent failure")
+
+// Permanent marks err as a permanent failure.
+func Permanent(err error) error { return fmt.Errorf("%w: %w", ErrPermanent, err) }
+
+// PostponeError asks the scheduler to run a job again later without
+// counting a failed attempt (e.g. an archive that is still settling).
+type PostponeError struct {
+	Until  time.Time
+	Reason string
+}
+
+func (e *PostponeError) Error() string { return "postponed: " + e.Reason }
+
+// Postpone returns a PostponeError.
+func Postpone(until time.Time, reason string) error {
+	return &PostponeError{Until: until, Reason: reason}
+}
+
 var (
 	errCancelled = errors.New("job cancelled by the operator")
 	errShutdown  = errors.New("daemon stopping")
@@ -43,7 +63,10 @@ type Options struct {
 	Workers int
 	// Targets returns the storages jobs may run for; their rclone-transfers
 	// caps concurrent jobs per storage.
-	Targets  func() []*config.Storage
+	Targets func() []*config.Storage
+	// Ready, if set, reports whether a storage can run jobs now (its
+	// repository is open); jobs of other storages wait.
+	Ready    func(storeID string) error
 	Runner   Runner
 	OnUpdate func(apiv1.JobUpdate)
 	Now      func() time.Time
@@ -180,6 +203,9 @@ func (s *Scheduler) eligibleStorages() []string {
 		if p, ok := s.paused[t.Remote]; ok && now.Before(p.Until) {
 			continue
 		}
+		if s.opts.Ready != nil && s.opts.Ready(t.ID) != nil {
+			continue
+		}
 		if perStorage[t.ID] < max(t.Transfers, 1) {
 			ids = append(ids, t.ID)
 		}
@@ -261,6 +287,7 @@ func (s *Scheduler) finish(t *Task, err, cause error) {
 		message string
 		update  func(*store.Job)
 	)
+	pe, isPostpone := errors.AsType[*PostponeError](err)
 	switch {
 	case err == nil:
 		state, message = StateComplete, "replication complete"
@@ -273,6 +300,17 @@ func (s *Scheduler) finish(t *Task, err, cause error) {
 	case errors.Is(err, ErrSourceLost):
 		state, message = StateSourceLost, err.Error()
 		update = func(j *store.Job) { j.ErrorClass, j.LastError = "source_lost", truncate(err.Error()) }
+	case errors.Is(err, ErrPermanent):
+		state, message = StateFailed, err.Error()
+		update = func(j *store.Job) {
+			j.ErrorClass, j.LastError, j.Attempts = "permanent", truncate(err.Error()), j.Attempts+1
+		}
+	case isPostpone:
+		state, message = StateRetryWait, pe.Error()
+		update = func(j *store.Job) {
+			at := pe.Until.Unix()
+			j.ErrorClass, j.LastError, j.NextAttemptAt, j.LeaseUntil = "", pe.Reason, &at, nil
+		}
 	default:
 		class := transport.Classify(err)
 		state, message, update = s.retryPolicy(ctx, j, remote, class, err, now)

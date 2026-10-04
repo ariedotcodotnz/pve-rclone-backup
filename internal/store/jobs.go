@@ -513,17 +513,47 @@ type Segment struct {
 
 // PutSegment inserts or replaces a segment row.
 func (s *Store) PutSegment(ctx context.Context, seg Segment) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO job_segments (job_id, idx, start_offset, size, sha256,
+	if err := putSegment(ctx, s.db, seg); err != nil {
+		return fmt.Errorf("store: put segment %d/%d: %w", seg.JobID, seg.Index, err)
+	}
+	return nil
+}
+
+func putSegment(ctx context.Context, e execer, seg Segment) error {
+	_, err := e.ExecContext(ctx, `INSERT INTO job_segments (job_id, idx, start_offset, size, sha256,
 		stored_size, stored_hash_type, stored_hash, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (job_id, idx) DO UPDATE SET start_offset = excluded.start_offset, size = excluded.size,
 		sha256 = excluded.sha256, stored_size = excluded.stored_size, stored_hash_type = excluded.stored_hash_type,
 		stored_hash = excluded.stored_hash, state = excluded.state`,
 		seg.JobID, seg.Index, seg.Offset, seg.Size, nullString(seg.SHA256), seg.StoredSize,
 		nullString(seg.StoredHashType), nullString(seg.StoredHash), seg.State)
+	return err
+}
+
+// RecordSegment stores a segment together with the job's progress in one
+// transaction, so a crash never leaves them disagreeing. The job must be
+// in state.
+func (s *Store) RecordSegment(ctx context.Context, seg Segment, state string, nextSegment int, hashState []byte, progress int64) (*Job, error) {
+	var out *Job
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		if err := putSegment(ctx, tx, seg); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE jobs SET next_segment = ?, hash_state = ?, progress_bytes = ?, updated_at = ?
+			WHERE id = ? AND state = ?`, nextSegment, hashState, progress, s.unix(), seg.JobID, state)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: job %d is no longer %s", ErrStateConflict, seg.JobID, state)
+		}
+		out, err = scanJob(tx.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE id = ?", seg.JobID))
+		return err
+	})
 	if err != nil {
-		return fmt.Errorf("store: put segment %d/%d: %w", seg.JobID, seg.Index, err)
+		return nil, fmt.Errorf("store: record segment %d/%d: %w", seg.JobID, seg.Index, err)
 	}
-	return nil
+	return out, nil
 }
 
 // Segments returns the segments of a job in order.

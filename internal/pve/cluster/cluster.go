@@ -59,8 +59,9 @@ func VMList(pveDir string) (map[int]Guest, error) {
 
 // Members describes the cluster membership seen by this node.
 type Members struct {
-	Node   string   // this node
-	Online []string // online nodes, sorted (just this node when standalone)
+	Node    string   // this node
+	Cluster string   // cluster name (empty when standalone)
+	Online  []string // online nodes, sorted (just this node when standalone)
 }
 
 // ReadMembers reads .members. A standalone node lists only itself.
@@ -75,6 +76,9 @@ func ReadMembers(pveDir, node string) (Members, error) {
 	}
 	var doc struct {
 		NodeName string `json:"nodename"`
+		Cluster  struct {
+			Name string `json:"name"`
+		} `json:"cluster"`
 		NodeList map[string]struct {
 			Online int `json:"online"`
 		} `json:"nodelist"`
@@ -82,6 +86,7 @@ func ReadMembers(pveDir, node string) (Members, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return m, fmt.Errorf("cluster: parse .members: %w", err)
 	}
+	m.Cluster = doc.Cluster.Name
 	if len(doc.NodeList) == 0 {
 		return m, nil
 	}

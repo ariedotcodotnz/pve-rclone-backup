@@ -535,6 +535,27 @@ func (m *Manager) List() []apiv1.Storage {
 	return out
 }
 
+// ErrNotReady means a storage's repository is not open (yet).
+var ErrNotReady = errors.New("storages: repository not open")
+
+// Repo returns a storage's open repository and its configuration.
+func (m *Manager) Repo(id string) (*repo.Repo, *config.Storage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entries[id]
+	switch {
+	case e == nil:
+		return nil, nil, fmt.Errorf("storages: %s is not configured", id)
+	case e.cfgErr != nil:
+		return nil, nil, fmt.Errorf("storages: %s: %w", id, e.cfgErr)
+	case !e.enabled:
+		return nil, nil, fmt.Errorf("storages: %s is disabled on this node", id)
+	case e.repo == nil:
+		return nil, nil, fmt.Errorf("%w: %s (%s)", ErrNotReady, id, e.health)
+	}
+	return e.repo, e.cfg, nil
+}
+
 // Targets returns the configurations of the storages enabled on this node
 // with a valid configuration, sorted by ID.
 func (m *Manager) Targets() []*config.Storage {

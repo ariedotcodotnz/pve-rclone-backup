@@ -5,6 +5,7 @@
 package daemon
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
 )
 
@@ -353,5 +355,69 @@ func TestDiscoveryEndpoints(t *testing.T) {
 	}
 	if err := c.Do(ctx, http.MethodPost, "/v1/discovery/notify", apiv1.DiscoveryNotify{Path: "relative"}, nil); !client.IsCode(err, apiv1.CodeInvalidArgument) {
 		t.Fatalf("relative path: %v", err)
+	}
+}
+
+// A finished vzdump archive is discovered, uploaded and listed as an
+// offsite backup.
+func TestReplicationEndToEnd(t *testing.T) {
+	ctx := t.Context()
+	r, _ := repotest.Init(t)
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	dump := filepath.Join(t.TempDir(), "dump")
+	if err := os.MkdirAll(dump, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeStorageCfg(t, e, fmt.Sprintf("dir: backups\n\tpath %s\n\tcontent backup\n\n", filepath.Dir(dump))+
+		strings.TrimSuffix(offsiteSection("offsite", r.Loc.Remote, "homelab"), "\n")+
+		"\trclone-replicate-from backups\n\trclone-backfill all\n\trclone-segment-size 64M\n\n")
+	archive := filepath.Join(dump, "vzdump-qemu-100-2026_10_04-02_00_01.vma.zst")
+	data := bytes.Repeat([]byte("vzdump archive "), 10000)
+	if err := os.WriteFile(archive, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dump, "vzdump-qemu-100-2026_10_04-02_00_01.log"), []byte("INFO: Finished Backup\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(archive, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	deadline := time.Now().Add(30 * time.Second)
+	var list []apiv1.Backup
+	for {
+		if err := c.Do(ctx, http.MethodGet, "/v1/storages/offsite/backups", nil, &list); err != nil {
+			t.Fatal(err)
+		}
+		if len(list) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			var jobs []apiv1.Job
+			_ = c.Do(ctx, http.MethodGet, "/v1/jobs", nil, &jobs)
+			t.Fatalf("backup not replicated; jobs: %+v", jobs)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	b := list[0]
+	if b.Volname != "backup/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst" || b.Size != int64(len(data)) || b.State != "complete" || b.VerifyLevel != 2 {
+		t.Fatalf("backup = %+v", b)
+	}
+	var jobs []apiv1.Job
+	if err := c.Do(ctx, http.MethodGet, "/v1/jobs?state=complete", nil, &jobs); err != nil || len(jobs) != 1 || jobs[0].ProgressBytes != int64(len(data)) {
+		t.Fatalf("jobs = %+v, %v", jobs, err)
+	}
+	// The installation identity was created and owns the source.
+	if _, err := os.Stat(filepath.Join(e.pveDir, "pve-rclone-backup", "source.json")); err != nil {
+		t.Fatal(err)
+	}
+	scanned, err := r.Scan(ctx, "homelab")
+	if err != nil || len(scanned) != 1 || scanned[0].State != repo.StateComplete {
+		t.Fatalf("remote scan = %+v, %v", scanned, err)
 	}
 }
