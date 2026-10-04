@@ -48,22 +48,28 @@ type Job struct {
 	UpdatedAt     int64
 	StartedAt     *int64
 	FinishedAt    *int64
+	// Guest identity of replication jobs.
+	VMType     string
+	VMID       int
+	BackupTime int64
 }
 
 const jobColumns = `id, kind, storeid, state, priority, dedupe_key, backup_volname, source_storage,
 	source_path, source_dev, source_ino, source_size, source_mtime_ns, attempts, next_attempt_at,
 	error_class, last_error, progress_bytes, total_bytes, next_segment, hash_state, owner_node,
-	lease_until, params_json, created_at, updated_at, started_at, finished_at`
+	lease_until, params_json, created_at, updated_at, started_at, finished_at, vmtype, vmid, backup_time`
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanJob(row scanner) (*Job, error) {
 	var j Job
-	var volname, srcStorage, srcPath, errClass, lastErr sql.NullString
+	var volname, srcStorage, srcPath, errClass, lastErr, vmtype sql.NullString
+	var vmid, backupTime sql.NullInt64
 	err := row.Scan(&j.ID, &j.Kind, &j.StoreID, &j.State, &j.Priority, &j.DedupeKey, &volname, &srcStorage,
 		&srcPath, &j.SourceDev, &j.SourceIno, &j.SourceSize, &j.SourceMtimeNs, &j.Attempts, &j.NextAttemptAt,
 		&errClass, &lastErr, &j.ProgressBytes, &j.TotalBytes, &j.NextSegment, &j.HashState, &j.OwnerNode,
-		&j.LeaseUntil, &j.ParamsJSON, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.FinishedAt)
+		&j.LeaseUntil, &j.ParamsJSON, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.FinishedAt,
+		&vmtype, &vmid, &backupTime)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -72,46 +78,144 @@ func scanJob(row scanner) (*Job, error) {
 	}
 	j.BackupVolname, j.SourceStorage, j.SourcePath = volname.String, srcStorage.String, srcPath.String
 	j.ErrorClass, j.LastError = errClass.String, lastErr.String
+	j.VMType, j.VMID, j.BackupTime = vmtype.String, int(vmid.Int64), backupTime.Int64
 	return &j, nil
 }
 
 func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: s != ""} }
 
+func nullInt(v int) sql.NullInt64 { return sql.NullInt64{Int64: int64(v), Valid: v != 0} }
+
+func nullInt64(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: v != 0} }
+
 // InsertJob adds a job unless one with the same dedupe key exists. It
 // returns the id of the new or existing job and whether it was created.
 func (s *Store) InsertJob(ctx context.Context, j *Job) (id int64, created bool, err error) {
-	if j.ParamsJSON == "" {
-		j.ParamsJSON = "{}"
-	}
-	now := s.unix()
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx, "SELECT id FROM jobs WHERE dedupe_key = ?", j.DedupeKey).Scan(&id)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO jobs (kind, storeid, state, priority, dedupe_key,
-			backup_volname, source_storage, source_path, source_dev, source_ino, source_size, source_mtime_ns,
-			next_attempt_at, total_bytes, owner_node, params_json, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			j.Kind, j.StoreID, j.State, j.Priority, j.DedupeKey, nullString(j.BackupVolname),
-			nullString(j.SourceStorage), nullString(j.SourcePath), j.SourceDev, j.SourceIno, j.SourceSize,
-			j.SourceMtimeNs, j.NextAttemptAt, j.TotalBytes, j.OwnerNode, j.ParamsJSON, now, now)
-		if err != nil {
-			return err
-		}
-		if id, err = res.LastInsertId(); err != nil {
-			return err
-		}
-		created = true
-		return insertEvent(ctx, tx, id, now, "info", "", j.State, "job created")
+		id, created, err = insertJob(ctx, tx, j, s.unix(), "job created")
+		return err
 	})
 	if err != nil {
 		return 0, false, fmt.Errorf("store: insert job: %w", err)
 	}
 	return id, created, nil
+}
+
+func insertJob(ctx context.Context, tx *sql.Tx, j *Job, now int64, message string) (id int64, created bool, err error) {
+	if j.ParamsJSON == "" {
+		j.ParamsJSON = "{}"
+	}
+	err = tx.QueryRowContext(ctx, "SELECT id FROM jobs WHERE dedupe_key = ?", j.DedupeKey).Scan(&id)
+	if err == nil {
+		return id, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+	var finished sql.NullInt64
+	if slices.Contains(terminalStates, j.State) {
+		finished = sql.NullInt64{Int64: now, Valid: true}
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO jobs (kind, storeid, state, priority, dedupe_key,
+		backup_volname, source_storage, source_path, source_dev, source_ino, source_size, source_mtime_ns,
+		next_attempt_at, total_bytes, owner_node, params_json, created_at, updated_at,
+		vmtype, vmid, backup_time, last_error, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.Kind, j.StoreID, j.State, j.Priority, j.DedupeKey, nullString(j.BackupVolname),
+		nullString(j.SourceStorage), nullString(j.SourcePath), j.SourceDev, j.SourceIno, j.SourceSize,
+		j.SourceMtimeNs, j.NextAttemptAt, j.TotalBytes, j.OwnerNode, j.ParamsJSON, now, now,
+		nullString(j.VMType), nullInt(j.VMID), nullInt64(j.BackupTime), nullString(j.LastError), finished)
+	if err != nil {
+		return 0, false, err
+	}
+	if id, err = res.LastInsertId(); err != nil {
+		return 0, false, err
+	}
+	return id, true, insertEvent(ctx, tx, id, now, "info", "", j.State, message)
+}
+
+// terminalStates never change again without operator action.
+var terminalStates = []string{"complete", "skipped", "superseded", "cancelled", "source_lost", "failed"}
+
+// InsertReplicateJob inserts a replication job like InsertJob. With
+// supersede set, a queued job replaces queued jobs of the same guest and
+// storage that describe an older backup and have not uploaded anything
+// yet; a job older than one already queued is recorded as superseded
+// instead. It returns the IDs of the jobs it superseded.
+func (s *Store) InsertReplicateJob(ctx context.Context, j *Job, supersede bool) (id int64, created bool, superseded []int64, err error) {
+	now := s.unix()
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		message := "job created"
+		pending := `kind = 'replicate' AND storeid = ? AND vmtype = ? AND vmid = ? AND state IN ('queued', 'retry_wait')`
+		if supersede && j.State == "queued" {
+			var newer int64
+			err := tx.QueryRowContext(ctx, "SELECT id FROM jobs WHERE "+pending+" AND backup_time > ? AND dedupe_key <> ? LIMIT 1",
+				j.StoreID, j.VMType, j.VMID, j.BackupTime, j.DedupeKey).Scan(&newer)
+			switch {
+			case err == nil:
+				j.State, message = "superseded", fmt.Sprintf("job created superseded by newer job %d", newer)
+			case !errors.Is(err, sql.ErrNoRows):
+				return err
+			}
+		}
+		id, created, err = insertJob(ctx, tx, j, now, message)
+		if err != nil || !created || !supersede || j.State != "queued" {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, "SELECT id, state FROM jobs WHERE "+pending+
+			" AND backup_time < ? AND next_segment = 0 AND progress_bytes = 0 AND id <> ?",
+			j.StoreID, j.VMType, j.VMID, j.BackupTime, id)
+		if err != nil {
+			return err
+		}
+		type old struct {
+			id    int64
+			state string
+		}
+		var olds []old
+		for rows.Next() {
+			var o old
+			if err := rows.Scan(&o.id, &o.state); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			olds = append(olds, o)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for _, o := range olds {
+			if _, err := tx.ExecContext(ctx, "UPDATE jobs SET state = 'superseded', updated_at = ?, finished_at = ? WHERE id = ?",
+				now, now, o.id); err != nil {
+				return err
+			}
+			if err := insertEvent(ctx, tx, o.id, now, "info", o.state, "superseded", fmt.Sprintf("superseded by newer job %d", id)); err != nil {
+				return err
+			}
+			superseded = append(superseded, o.id)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, false, nil, fmt.Errorf("store: insert job: %w", err)
+	}
+	return id, created, superseded, nil
+}
+
+// GuestReplication reports the newest backup time of a guest on a storage
+// among replication jobs in the given states (0 if none).
+func (s *Store) GuestReplication(ctx context.Context, storeID, vmtype string, vmid int, states []string) (int64, error) {
+	if len(states) == 0 {
+		return 0, nil
+	}
+	args := []any{storeID, vmtype, vmid}
+	for _, st := range states {
+		args = append(args, st)
+	}
+	var newest sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(backup_time) FROM jobs WHERE kind = 'replicate' AND storeid = ?
+		AND vmtype = ? AND vmid = ? AND state IN (`+strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")+`)`, args...).Scan(&newest)
+	return newest.Int64, err
 }
 
 // GetJob returns a job by id.

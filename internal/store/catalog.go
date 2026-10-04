@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // StorageRow caches an rclone-backup storage and its repository binding.
@@ -286,4 +287,20 @@ func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*B
 		}
 		return nil
 	})
+}
+
+// NewestBackup returns the newest backup time of a guest in a storage's
+// catalogue among the given states (0 if none).
+func (s *Store) NewestBackup(ctx context.Context, storeID, vmtype string, vmid int, states []string) (int64, error) {
+	if len(states) == 0 {
+		return 0, nil
+	}
+	args := []any{storeID, vmtype, vmid}
+	for _, st := range states {
+		args = append(args, st)
+	}
+	var newest sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(backup_time) FROM backups WHERE storeid = ? AND vmtype = ? AND vmid = ?
+		AND state IN (`+strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")+`)`, args...).Scan(&newest)
+	return newest.Int64, err
 }

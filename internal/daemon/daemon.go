@@ -21,6 +21,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/config"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/discovery"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/storages"
@@ -63,6 +64,7 @@ type Daemon struct {
 	store      *store.Store
 	api        *api.Server
 	storages   *storages.Manager
+	discovery  *discovery.Discoverer
 	startedAt  time.Time
 	instanceID string
 	problems   []string
@@ -126,6 +128,18 @@ func Run(ctx context.Context, opts Options) error {
 			if s, ok := d.storages.Get(id); ok {
 				d.api.Events().Publish("storage.status", s)
 			}
+			if d.discovery != nil {
+				d.discovery.Refresh()
+			}
+		},
+	})
+	ncfg := d.loadNodeConfig()
+	d.discovery = discovery.New(discovery.Options{
+		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir,
+		Targets: d.storages.Targets, Ready: d.replicationReady,
+		Inotify: ncfg.Inotify, ScanInterval: ncfg.ScanInterval,
+		OnJob: func(id int64, state string) {
+			d.api.Events().Publish("job.updated", apiv1.JobUpdate{ID: id, State: state})
 		},
 	})
 	if err := d.storages.Reload(ctx); err != nil {
@@ -133,6 +147,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	d.routes()
 	d.storageRoutes()
+	d.discoveryRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
@@ -151,6 +166,7 @@ func Run(ctx context.Context, opts Options) error {
 		workers.Wait()
 	}()
 	workers.Go(func() { d.storages.Run(serveCtx) })
+	workers.Go(func() { d.discovery.Run(serveCtx) })
 
 	if opts.Ready != nil {
 		opts.Ready()
@@ -190,6 +206,39 @@ func (d *Daemon) loadDaemonConfig() *config.DaemonConfig {
 	d.log.Warn("daemon configuration unusable; using defaults", "path", path, "err", err)
 	d.problems = append(d.problems, fmt.Sprintf("%s: %v", path, err))
 	return config.DefaultDaemonConfig()
+}
+
+// loadNodeConfig reads this node's configuration; problems are reported
+// and the defaults used.
+func (d *Daemon) loadNodeConfig() *config.NodeConfig {
+	path := filepath.Join(d.opts.PVEDir, "nodes", d.opts.Node, "pve-rclone-backup.cfg")
+	raw, err := os.ReadFile(path) //nolint:gosec // fixed path below the PVE directory
+	if errors.Is(err, os.ErrNotExist) {
+		return config.DefaultNodeConfig()
+	}
+	if err == nil {
+		var c *config.NodeConfig
+		if c, err = config.ParseNodeConfig(raw); err == nil {
+			return c
+		}
+	}
+	d.log.Warn("node configuration unusable; using defaults", "path", path, "err", err)
+	d.problems = append(d.problems, fmt.Sprintf("%s: %v", path, err))
+	return config.DefaultNodeConfig()
+}
+
+// replicationReady reports whether archives may be queued for a storage:
+// its repository must be known and usable (it may be temporarily
+// unreachable; uploads wait).
+func (d *Daemon) replicationReady(id string) error {
+	s, ok := d.storages.Get(id)
+	switch {
+	case !ok:
+		return fmt.Errorf("storage %s is not configured", id)
+	case !s.Active:
+		return fmt.Errorf("storage %s is not ready (%s)", id, s.Health)
+	}
+	return nil
 }
 
 func (d *Daemon) watchdog(ctx context.Context, iv time.Duration) {

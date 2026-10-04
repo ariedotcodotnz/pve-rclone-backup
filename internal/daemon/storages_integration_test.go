@@ -306,3 +306,52 @@ func TestStorageHealth(t *testing.T) {
 		t.Fatalf("storage with an unreachable remote after restart = %+v", s)
 	}
 }
+
+func TestDiscoveryEndpoints(t *testing.T) {
+	ctx := t.Context()
+	r, _ := repotest.Init(t)
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	dump := filepath.Join(t.TempDir(), "dump")
+	if err := os.MkdirAll(dump, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fmt.Sprintf("dir: backups\n\tpath %s\n\tcontent backup\n\n", filepath.Dir(dump)) +
+		strings.TrimSuffix(offsiteSection("offsite", r.Loc.Remote, "homelab"), "\n") +
+		"\trclone-replicate-from backups\n\trclone-backfill all\n\n"
+	writeStorageCfg(t, e, cfg)
+	archive := filepath.Join(dump, "vzdump-qemu-100-2026_10_04-02_00_01.vma.zst")
+	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	waitStorage(t, c, "offsite", resynced)
+
+	// The daemon scans on its own once the storage is ready; an explicit
+	// scan then finds the archive already handled.
+	var sum apiv1.ScanSummary
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := c.Do(ctx, http.MethodPost, "/v1/discovery/scan", map[string]string{"storage": "offsite"}, &sum); err != nil {
+			t.Fatal(err)
+		}
+		if sum.Known == 1 || sum.Queued == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("archive not discovered: %+v", sum)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if sum.Sources != 1 || sum.Archives != 1 {
+		t.Fatalf("scan = %+v", sum)
+	}
+	if err := c.Do(ctx, http.MethodPost, "/v1/discovery/notify", apiv1.DiscoveryNotify{Path: archive, Phase: "backup-end"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Do(ctx, http.MethodPost, "/v1/discovery/notify", apiv1.DiscoveryNotify{Path: "relative"}, nil); !client.IsCode(err, apiv1.CodeInvalidArgument) {
+		t.Fatalf("relative path: %v", err)
+	}
+}

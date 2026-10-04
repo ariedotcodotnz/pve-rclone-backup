@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,7 +32,7 @@ func TestOpenCreatesLatestSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, ok, err := s.Meta(t.Context(), "schema_version")
-	if err != nil || !ok || v != strconv.Itoa(LatestSchemaVersion()) || LatestSchemaVersion() != 2 {
+	if err != nil || !ok || v != strconv.Itoa(LatestSchemaVersion()) || LatestSchemaVersion() < 3 {
 		t.Fatalf("schema_version = %q %v %v", v, ok, err)
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
@@ -220,6 +221,60 @@ func TestJobQueue(t *testing.T) {
 	segs, _ := s.Segments(ctx, id1)
 	if len(segs) != 3 || segs[1].State != "uploaded" || *segs[1].StoredSize != ss || segs[1].StoredHash != "qx" {
 		t.Fatalf("segments = %+v", segs)
+	}
+}
+
+func TestReplicateJobsSupersede(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	job := func(day int, state string) *Job {
+		return &Job{Kind: "replicate", StoreID: "offsite", State: state, OwnerNode: "pve1",
+			DedupeKey: fmt.Sprintf("replicate:offsite:local:%d", day), VMType: "qemu", VMID: 100,
+			BackupTime: int64(day) * 86400}
+	}
+	id1, _, sup, err := s.InsertReplicateJob(ctx, job(1, "queued"), true)
+	if err != nil || len(sup) != 0 {
+		t.Fatal(sup, err)
+	}
+	// A job that already uploaded a segment is kept.
+	id2, _, _, _ := s.InsertReplicateJob(ctx, job(2, "queued"), false)
+	if _, err := s.UpdateJob(ctx, id2, []string{"queued"}, "started", func(j *Job) error {
+		j.State, j.NextSegment = "retry_wait", 1
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other := job(2, "queued")
+	other.VMID, other.DedupeKey = 101, "replicate:offsite:local:other"
+	idOther, _, _, _ := s.InsertReplicateJob(ctx, other, true)
+
+	id3, created, sup, err := s.InsertReplicateJob(ctx, job(3, "queued"), true)
+	if err != nil || !created || len(sup) != 1 || sup[0] != id1 {
+		t.Fatalf("superseded %v, %v", sup, err)
+	}
+	for id, want := range map[int64]string{id1: "superseded", id2: "retry_wait", idOther: "queued", id3: "queued"} {
+		if j, _ := s.GetJob(ctx, id); j.State != want {
+			t.Errorf("job %d is %s, want %s", id, j.State, want)
+		}
+	}
+	if j, _ := s.GetJob(ctx, id1); j.FinishedAt == nil || j.VMType != "qemu" || j.VMID != 100 || j.BackupTime != 86400 {
+		t.Errorf("superseded job = %+v", j)
+	}
+	// An older archive discovered later is superseded on arrival, and a
+	// repeated insert changes nothing.
+	idOld, created, _, _ := s.InsertReplicateJob(ctx, job(0, "queued"), true)
+	if j, _ := s.GetJob(ctx, idOld); !created || j.State != "superseded" {
+		t.Fatalf("late older job = %+v", j)
+	}
+	if again, created, sup, _ := s.InsertReplicateJob(ctx, job(3, "queued"), true); created || again != id3 || len(sup) != 0 {
+		t.Fatal("repeated insert created or superseded jobs")
+	}
+	newest, err := s.GuestReplication(ctx, "offsite", "qemu", 100, []string{"queued", "retry_wait", "complete"})
+	if err != nil || newest != 3*86400 {
+		t.Fatalf("newest = %d, %v", newest, err)
+	}
+	if n, _ := s.GuestReplication(ctx, "offsite", "lxc", 100, []string{"queued"}); n != 0 {
+		t.Fatalf("other guest type newest = %d", n)
 	}
 }
 

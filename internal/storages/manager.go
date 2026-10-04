@@ -217,6 +217,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 		if err := m.adoptRow(ctx, e); err != nil {
 			m.log.Warn("record storage", "storage", e.id, "err", err)
 		}
+		m.changed(e.id)
 	}
 	m.Wake()
 	return nil
@@ -530,6 +531,20 @@ func (m *Manager) List() []apiv1.Storage {
 	out := make([]apiv1.Storage, 0, len(m.entries))
 	for _, id := range slices.Sorted(maps.Keys(m.entries)) {
 		out = append(out, m.entries[id].view())
+	}
+	return out
+}
+
+// Targets returns the configurations of the storages enabled on this node
+// with a valid configuration, sorted by ID.
+func (m *Manager) Targets() []*config.Storage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*config.Storage
+	for _, id := range slices.Sorted(maps.Keys(m.entries)) {
+		if e := m.entries[id]; e.enabled && e.cfgErr == nil {
+			out = append(out, e.cfg)
+		}
 	}
 	return out
 }

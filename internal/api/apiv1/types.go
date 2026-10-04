@@ -199,3 +199,26 @@ type ValidateRequest struct {
 type ValidateResponse struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
+
+// ScanSummary reports a discovery scan.
+type ScanSummary struct {
+	Sources    int      `json:"sources"`    // usable source storages scanned
+	Archives   int      `json:"archives"`   // archives seen
+	Queued     int      `json:"queued"`     // new uploads queued
+	Skipped    int      `json:"skipped"`    // archives recorded as not replicated
+	Superseded int      `json:"superseded"` // queued uploads replaced by newer archives
+	Known      int      `json:"known"`      // archives already handled earlier
+	Problems   []string `json:"problems,omitempty"`
+}
+
+// DiscoveryNotify is sent by the optional vzdump hook.
+type DiscoveryNotify struct {
+	Path  string `json:"path"`
+	Phase string `json:"phase,omitempty"`
+}
+
+// JobUpdate is the payload of job.updated events.
+type JobUpdate struct {
+	ID    int64  `json:"id"`
+	State string `json:"state"`
+}
