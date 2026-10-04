@@ -4,8 +4,8 @@ Offsite replication of Proxmox VE backups to rclone-supported cloud storage.
 Microsoft OneDrive Personal is the first target.
 
 > **Status: pre-alpha, under active development.** Replication, verification, retention, fetch and
-> restore work through the CLI and the TUI. There is no Debian package yet, and it has not been tested on a
-> real PVE host or against a real OneDrive account.
+> restore work through the CLI and the TUI, and `make deb` builds an installable package. It has not
+> yet been tested on a real PVE host or against a real OneDrive account.
 
 ## How it works
 
@@ -63,13 +63,18 @@ These commands run as root on a PVE node with the daemon running.
 
 ## Building
 
-You need Go 1.26 or newer.
+You need Go 1.26 or newer; the package and Perl tests also need Docker.
 
 ```sh
-make build   # bin/pve-rclone-backupd, bin/pve-rclone-backup
-make test
+make build      # bin/pve-rclone-backupd, bin/pve-rclone-backup
+make test       # unit tests; make integration, make perl-test for more
 make lint
+make deb        # dist/pve-rclone-backup_<version>_amd64.deb
+make deb-test   # install, use and purge the package in a PVE storage library container
 ```
+
+Recovering without the original host is described in [docs/dr-runbook.md](docs/dr-runbook.md), and
+recovering with stock rclone only in [docs/manual-recovery.md](docs/manual-recovery.md).
 
 ## License
 

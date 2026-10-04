@@ -1,0 +1,25 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+case "$1" in
+remove)
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+    fi
+    ;;
+purge)
+    if [ -x /usr/bin/deb-systemd-helper ]; then
+        deb-systemd-helper purge pve-rclone-backupd.service >/dev/null || true
+    fi
+    rm -rf /var/lib/pve-rclone-backup
+    # Configuration, keys and credentials are cluster-wide and may still be
+    # used by other nodes; they are never removed by the package.
+    if [ -d /etc/pve/pve-rclone-backup ] || [ -d /etc/pve/priv/pve-rclone-backup ]; then
+        echo "pve-rclone-backup: /etc/pve/pve-rclone-backup and /etc/pve/priv/pve-rclone-backup were kept" >&2
+        echo "pve-rclone-backup: (cluster-wide settings, repository keys and credentials)." >&2
+    fi
+    ;;
+esac
+
+exit 0

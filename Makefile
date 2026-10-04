@@ -11,7 +11,7 @@ export CGO_ENABLED ?= 0
 
 BINARIES := pve-rclone-backupd pve-rclone-backup
 
-.PHONY: all build generate test race integration perl-test lint fmt vet clean
+.PHONY: all build generate test race integration perl-test deb deb-test lint fmt vet clean
 
 all: build
 
@@ -42,6 +42,19 @@ integration:
 # container (needs docker).
 perl-test: $(BINDIR)/pve-rclone-backupd $(BINDIR)/pve-rclone-backup
 	test/perl/run.sh
+
+# Debian package version: 0.1.0~dev.<date>.g<commit> until releases are tagged.
+DEB_VERSION ?= 0.1.0~dev.$(shell date -u +%Y%m%d).g$(shell git rev-parse --short HEAD 2>/dev/null || echo 0)
+DEB_ARCH    ?= amd64
+
+# Static binaries, so the package depends on nothing but PVE and the tools it runs.
+deb:
+	CGO_ENABLED=0 GOARCH=$(DEB_ARCH) $(MAKE) build VERSION=$(DEB_VERSION)
+	packaging/build-deb.sh $(DEB_VERSION) $(DEB_ARCH) $(BINDIR) dist
+
+# Install, use and purge the package in the PVE test container.
+deb-test: deb
+	test/deb/run.sh dist/pve-rclone-backup_$(DEB_VERSION)_$(DEB_ARCH).deb
 
 fmt:
 	gofmt -w $$(git ls-files '*.go')

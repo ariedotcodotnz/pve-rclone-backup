@@ -1,0 +1,2 @@
+# Proxmox VE reloads its API daemons, which load storage plugins.
+activate-noawait pve-api-updates

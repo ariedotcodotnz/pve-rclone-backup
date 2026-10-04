@@ -1,0 +1,47 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Build the binary Debian package from already built binaries:
+#   packaging/build-deb.sh <version> <arch> <bindir> <outdir>
+set -eu
+umask 022
+
+version=$1 arch=$2 bindir=$3 outdir=$4
+root=$(cd "$(dirname "$0")/.." && pwd)
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+pkg="$stage/pkg"
+
+install -D -m 0755 "$bindir/pve-rclone-backupd" "$pkg/usr/sbin/pve-rclone-backupd"
+install -D -m 0755 "$bindir/pve-rclone-backup" "$pkg/usr/bin/pve-rclone-backup"
+install -D -m 0644 "$root/systemd/pve-rclone-backupd.service" "$pkg/usr/lib/systemd/system/pve-rclone-backupd.service"
+
+perl="$pkg/usr/share/perl5/PVE"
+install -D -m 0644 "$root/perl/PVE/Storage/Custom/RcloneBackupPlugin.pm" "$perl/Storage/Custom/RcloneBackupPlugin.pm"
+install -D -m 0644 "$root/perl/PVE/Storage/Custom/RcloneBackup/Client.pm" "$perl/Storage/Custom/RcloneBackup/Client.pm"
+install -D -m 0644 "$root/perl/PVE/Storage/Custom/RcloneBackup/Schema.pm" "$perl/Storage/Custom/RcloneBackup/Schema.pm"
+install -D -m 0644 "$root/perl/PVE/BackupProvider/Plugin/Rclone.pm" "$perl/BackupProvider/Plugin/Rclone.pm"
+
+doc="$pkg/usr/share/doc/pve-rclone-backup"
+install -D -m 0644 "$root/README.md" "$doc/README.md"
+install -m 0644 "$root/docs/dr-runbook.md" "$root/docs/manual-recovery.md" "$doc/"
+install -m 0644 "$root/packaging/debian/copyright" "$doc/copyright"
+printf 'pve-rclone-backup (%s) unstable; urgency=medium\n\n  * Build from source revision %s.\n\n -- ariedotcodotnz <ariedotcodotnz@users.noreply.github.com>  %s\n' \
+    "$version" "$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo unknown)" "$(date -R)" | gzip -9n > "$doc/changelog.gz"
+
+install -d "$pkg/usr/share/bash-completion/completions" "$pkg/usr/share/zsh/vendor-completions"
+"$bindir/pve-rclone-backup" completion bash > "$pkg/usr/share/bash-completion/completions/pve-rclone-backup"
+"$bindir/pve-rclone-backup" completion zsh > "$pkg/usr/share/zsh/vendor-completions/_pve-rclone-backup"
+
+install -d "$pkg/DEBIAN"
+for f in postinst prerm postrm; do
+    install -m 0755 "$root/packaging/debian/$f" "$pkg/DEBIAN/$f"
+done
+install -m 0644 "$root/packaging/debian/triggers" "$pkg/DEBIAN/triggers"
+size=$(du -sk --exclude=DEBIAN "$pkg" | cut -f1)
+sed -e "s/@VERSION@/$version/" -e "s/@ARCH@/$arch/" -e "s/@SIZE@/$size/" \
+    "$root/packaging/debian/control.in" > "$pkg/DEBIAN/control"
+(cd "$pkg" && find . -type f ! -path './DEBIAN/*' -exec md5sum {} + | sed 's|\./||') > "$pkg/DEBIAN/md5sums"
+
+mkdir -p "$outdir"
+dpkg-deb --root-owner-group -Zxz --build "$pkg" "$outdir/pve-rclone-backup_${version}_${arch}.deb"

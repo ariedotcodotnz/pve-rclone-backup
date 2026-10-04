@@ -1,0 +1,19 @@
+Package: pve-rclone-backup
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: ariedotcodotnz <ariedotcodotnz@users.noreply.github.com>
+Installed-Size: @SIZE@
+Depends: libpve-storage-perl (>= 9.0.13), libjson-perl, perl, zstd, tar, gzip
+Recommends: pve-manager (>= 9.0), pve-qemu-kvm
+Section: admin
+Priority: optional
+Homepage: https://github.com/ariedotcodotnz/pve-rclone-backup
+Description: Offsite replication of Proxmox VE backups through rclone
+ pve-rclone-backup replicates finished vzdump backups from local storage to
+ cloud storage supported by rclone (Microsoft OneDrive first), encrypted and
+ in resumable segments, without a second local copy. A storage plugin of type
+ rclone-backup lists the offsite backups in Proxmox VE, with notes,
+ protection, offsite retention and the guest configuration.
+ .
+ The package contains the pve-rclone-backupd daemon, the pve-rclone-backup
+ command line and terminal interface, and the Perl storage plugin.
