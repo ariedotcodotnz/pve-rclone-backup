@@ -31,6 +31,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/replicate"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/restore"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/retention"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/storages"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -89,6 +90,7 @@ type Daemon struct {
 	fetches    *jobs.Scheduler
 	restores   *jobs.Scheduler
 	verifies   *jobs.Scheduler
+	deletes    *jobs.Scheduler
 	remotes    *remotes.Manager
 	keyStore   KeyStore
 	ledger     *recoverykit.Ledger
@@ -160,7 +162,10 @@ func Run(ctx context.Context, opts Options) error {
 	d.storages = storages.New(storages.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Keys: opts.Keys,
 		AboutInterval: dcfg.AboutInterval, ResyncInterval: dcfg.CatalogResyncInterval,
-		OnResync: func(id string, rep *catalog.Report) { d.damagedAlert(context.Background(), id, rep) },
+		OnResync: func(id string, rep *catalog.Report) {
+			d.damagedAlert(context.Background(), id, rep)
+			d.finishDeletions(id, rep)
+		},
 		OnChange: func(id string) {
 			if s, ok := d.storages.Get(id); ok {
 				d.api.Events().Publish("storage.status", s)
@@ -217,6 +222,17 @@ func Run(ctx context.Context, opts Options) error {
 			OnUpdate: func(u apiv1.JobUpdate) { d.api.Events().Publish("job.updated", u) },
 		})
 	}
+	d.deletes = jobs.New(jobs.Options{
+		Log: d.log, Store: st, Node: opts.Node, Kind: "delete", Workers: 1, Targets: d.storages.Targets,
+		Runner: &retention.Deleter{Log: d.log, Store: st, Repos: d.storages.Repo, OnRemoved: func(storeID, volname string) {
+			d.api.Events().Publish("backup.removed", map[string]string{"storage": storeID, "volname": volname})
+		}},
+		Ready: func(id string) error {
+			_, _, err := d.storages.Repo(id)
+			return err
+		},
+		OnUpdate: func(u apiv1.JobUpdate) { d.api.Events().Publish("job.updated", u) },
+	})
 	if err := d.storages.Reload(ctx); err != nil {
 		d.log.Warn("load storage configuration", "err", err)
 	}
@@ -229,6 +245,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.backupRoutes()
 	d.restoreRoutes()
 	d.verifyRoutes()
+	d.retentionRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
@@ -253,6 +270,8 @@ func Run(ctx context.Context, opts Options) error {
 	workers.Go(func() { d.restores.Run(serveCtx) })
 	workers.Go(func() { d.verifies.Run(serveCtx) })
 	workers.Go(func() { d.planVerification(serveCtx) })
+	workers.Go(func() { d.deletes.Run(serveCtx) })
+	workers.Go(func() { d.retentionLoop(serveCtx, dcfg.RetentionTime) })
 	workers.Go(func() { d.pushMeta(serveCtx) })
 
 	if opts.Ready != nil {

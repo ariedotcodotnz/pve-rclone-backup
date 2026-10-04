@@ -116,6 +116,9 @@ like(($plugin->path($scfg, $vol, 'offsite'))[0], qr{^/run/pve-rclone-backup/virt
 my $provider = $plugin->new_backup_provider($scfg, 'offsite', sub { });
 like($provider->archive_get_guest_config($vol), qr/hostname: ct1/, 'guest configuration from the manifest');
 
+my $pruned = $plugin->prune_backups($scfg, 'offsite', { 'keep-last' => 1 }, undef, undef, 1, sub { });
+is_deeply([map { "$_->{volid}=$_->{mark}" } @$pruned], ["offsite:$vol=keep"], 'prune preview through PVE');
+
 is($plugin->get_volume_attribute($scfg, 'offsite', $vol, 'notes'), 'nightly ct', 'notes attribute');
 $plugin->update_volume_attribute($scfg, 'offsite', $vol, 'notes', 'kept for audit');
 is($plugin->get_volume_attribute($scfg, 'offsite', $vol, 'notes'), 'kept for audit', 'notes updated');

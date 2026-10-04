@@ -498,3 +498,22 @@ type Verification struct {
 	Result     string          `json:"result,omitempty"` // ok | failed | damaged | error
 	Details    json.RawMessage `json:"details,omitempty"`
 }
+
+// PruneRequest prunes a storage's offsite backups. Keep holds PVE's
+// prune-backups options (nil: the storage's own setting).
+type PruneRequest struct {
+	Keep   map[string]any `json:"keep,omitempty"`
+	VMID   *int           `json:"vmid,omitempty"`
+	Type   string         `json:"type,omitempty"`
+	DryRun bool           `json:"dry_run"`
+}
+
+// PruneEntry is a backup considered by a prune, as PVE reports it.
+type PruneEntry struct {
+	Volid  string `json:"volid"`
+	CTime  int64  `json:"ctime"`
+	Type   string `json:"type"`
+	VMID   int    `json:"vmid"`
+	Mark   string `json:"mark"` // keep, remove, protected or renamed
+	Reason string `json:"reason,omitempty"`
+}

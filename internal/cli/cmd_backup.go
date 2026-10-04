@@ -111,5 +111,6 @@ func (a *App) backupCommand() *cobra.Command {
 		return nil
 	}}
 	cmd.AddCommand(list, inspect, a.fetchCommand(), a.backupVerifyCommand())
+	cmd.AddCommand(a.backupEditCommands()...)
 	return cmd
 }

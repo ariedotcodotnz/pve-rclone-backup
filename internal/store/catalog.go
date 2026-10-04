@@ -367,3 +367,23 @@ func (s *Store) NewestBackup(ctx context.Context, storeID, vmtype string, vmid i
 		AND state IN (`+strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")+`)`, args...).Scan(&newest)
 	return newest.Int64, err
 }
+
+// TombstonesDue returns tombstoned, unprotected backups whose grace period
+// has ended.
+func (s *Store) TombstonesDue(ctx context.Context, now int64) ([]*Backup, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups WHERE state = 'tombstoned'
+		AND protected = 0 AND delete_after IS NOT NULL AND delete_after <= ? ORDER BY delete_after`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*Backup
+	for rows.Next() {
+		b, err := scanBackup(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
