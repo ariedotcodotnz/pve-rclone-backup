@@ -319,38 +319,66 @@ func (s *Store) UpdateJob(ctx context.Context, id int64, expected []string, mess
 	return out, nil
 }
 
-// ClaimRunnable leases the next runnable job: the highest priority, oldest
-// job in one of states whose next attempt is due. It moves the job to
-// toState and sets the lease. It returns ErrNotFound if nothing is runnable.
+// ClaimOptions selects a job to claim.
+type ClaimOptions struct {
+	Kind         string
+	States       []string // claimable states
+	ToState      string
+	Owner        string
+	LeaseSeconds int64
+	// StoreIDs, if set, limits the claim to these storages.
+	StoreIDs []string
+}
+
+// ClaimRunnable claims the most urgent runnable job of a kind (see ClaimJob).
 func (s *Store) ClaimRunnable(ctx context.Context, kind string, states []string, toState, owner string, leaseSeconds int64) (*Job, error) {
+	return s.ClaimJob(ctx, ClaimOptions{Kind: kind, States: states, ToState: toState, Owner: owner, LeaseSeconds: leaseSeconds})
+}
+
+// ClaimJob atomically moves the most urgent runnable job to opts.ToState
+// and leases it to opts.Owner. Jobs are ordered by priority, then newest
+// backup first. It returns ErrNotFound when nothing is runnable.
+func (s *Store) ClaimJob(ctx context.Context, opts ClaimOptions) (*Job, error) {
+	if len(opts.States) == 0 {
+		return nil, ErrNotFound
+	}
 	var out *Job
 	err := s.Tx(ctx, func(tx *sql.Tx) error {
 		now := s.unix()
-		args := []any{kind}
-		for _, st := range states {
+		q := "SELECT " + jobColumns + " FROM jobs WHERE kind = ? AND state IN (" + placeholders(len(opts.States)) +
+			") AND (next_attempt_at IS NULL OR next_attempt_at <= ?)"
+		args := []any{opts.Kind}
+		for _, st := range opts.States {
 			args = append(args, st)
 		}
 		args = append(args, now)
-		row := tx.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE kind = ? AND state IN ("+
-			strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")+
-			") AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY priority DESC, id ASC LIMIT 1", args...)
-		j, err := scanJob(row)
+		if opts.StoreIDs != nil {
+			if len(opts.StoreIDs) == 0 {
+				return ErrNotFound
+			}
+			q += " AND storeid IN (" + placeholders(len(opts.StoreIDs)) + ")"
+			for _, id := range opts.StoreIDs {
+				args = append(args, id)
+			}
+		}
+		q += " ORDER BY priority DESC, COALESCE(backup_time, 0) DESC, id ASC LIMIT 1"
+		j, err := scanJob(tx.QueryRowContext(ctx, q, args...))
 		if err != nil {
 			return err
 		}
 		from := j.State
-		lease := now + leaseSeconds
-		j.State, j.OwnerNode, j.LeaseUntil, j.UpdatedAt = toState, owner, &lease, now
+		lease := now + opts.LeaseSeconds
+		j.State, j.OwnerNode, j.LeaseUntil, j.UpdatedAt = opts.ToState, opts.Owner, &lease, now
 		if j.StartedAt == nil {
 			j.StartedAt = &now
 		}
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE jobs SET state = ?, owner_node = ?, lease_until = ?, started_at = ?, updated_at = ? WHERE id = ?",
-			j.State, owner, lease, j.StartedAt, now, j.ID); err != nil {
+			j.State, opts.Owner, lease, j.StartedAt, now, j.ID); err != nil {
 			return err
 		}
 		out = j
-		return insertEvent(ctx, tx, j.ID, now, "info", from, toState, "claimed by "+owner)
+		return insertEvent(ctx, tx, j.ID, now, "info", from, opts.ToState, "claimed by "+opts.Owner)
 	})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -359,6 +387,22 @@ func (s *Store) ClaimRunnable(ctx context.Context, kind string, states []string,
 		return nil, fmt.Errorf("store: claim job: %w", err)
 	}
 	return out, nil
+}
+
+func placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
+
+// RenewLease extends the lease of a job held by owner.
+func (s *Store) RenewLease(ctx context.Context, id int64, owner string, leaseSeconds int64) error {
+	now := s.unix()
+	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET lease_until = ?, updated_at = ? WHERE id = ? AND owner_node = ?",
+		now+leaseSeconds, now, id, owner)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // RequeueInterrupted moves jobs left in any of active states by a crashed or

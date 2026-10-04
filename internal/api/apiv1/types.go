@@ -219,6 +219,61 @@ type DiscoveryNotify struct {
 
 // JobUpdate is the payload of job.updated events.
 type JobUpdate struct {
-	ID    int64  `json:"id"`
-	State string `json:"state"`
+	ID            int64  `json:"id"`
+	State         string `json:"state"`
+	ProgressBytes int64  `json:"progress_bytes,omitzero"`
+	TotalBytes    *int64 `json:"total_bytes,omitempty"`
+}
+
+// Job is a queued or finished job.
+type Job struct {
+	ID            int64      `json:"id"`
+	Kind          string     `json:"kind"`
+	Storage       string     `json:"storage"`
+	State         string     `json:"state"`
+	Priority      int        `json:"priority"`
+	Volname       string     `json:"volname,omitempty"`
+	SourceStorage string     `json:"source_storage,omitempty"`
+	SourcePath    string     `json:"source_path,omitempty"`
+	VMType        string     `json:"vmtype,omitempty"`
+	VMID          int        `json:"vmid,omitzero"`
+	BackupTime    int64      `json:"backup_time,omitzero"`
+	Attempts      int        `json:"attempts"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	ErrorClass    string     `json:"error_class,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
+	ProgressBytes int64      `json:"progress_bytes"`
+	TotalBytes    *int64     `json:"total_bytes,omitempty"`
+	NextSegment   int        `json:"next_segment"`
+	OwnerNode     string     `json:"owner_node"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+}
+
+// JobSegment is an uploaded or pending segment of a replication job.
+type JobSegment struct {
+	Index      int    `json:"index"`
+	Offset     int64  `json:"offset"`
+	Size       int64  `json:"size"`
+	State      string `json:"state"`
+	SHA256     string `json:"sha256,omitempty"`
+	StoredSize *int64 `json:"stored_size,omitempty"`
+}
+
+// JobEvent is an entry of a job's history.
+type JobEvent struct {
+	Time      time.Time `json:"time"`
+	Level     string    `json:"level"`
+	FromState string    `json:"from_state,omitempty"`
+	ToState   string    `json:"to_state,omitempty"`
+	Message   string    `json:"message"`
+}
+
+// JobDetail adds segments and history to a job.
+type JobDetail struct {
+	Job
+	Segments []JobSegment `json:"segments"`
+	Events   []JobEvent   `json:"events"`
 }

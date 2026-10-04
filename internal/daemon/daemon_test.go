@@ -4,15 +4,18 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -186,5 +189,59 @@ func TestSecondDaemonRefused(t *testing.T) {
 		Socket: e.socket, StateDir: t.TempDir(), AllowUIDs: []uint32{uint32(os.Getuid())}})
 	if err == nil || !strings.Contains(err.Error(), "already listening") {
 		t.Fatalf("second daemon: %v", err)
+	}
+}
+
+func TestJobEndpoints(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(e.stateDir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, _, _ := st.InsertJob(ctx, &store.Job{Kind: "replicate", StoreID: "offsite", State: "queued", DedupeKey: "q",
+		OwnerNode: "pve-test", BackupVolname: "backup/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst", VMType: "qemu", VMID: 100})
+	failed, _, _ := st.InsertJob(ctx, &store.Job{Kind: "replicate", StoreID: "offsite", State: "failed", DedupeKey: "f",
+		OwnerNode: "pve-test", LastError: "boom"})
+	if err := st.PutSegment(ctx, store.Segment{JobID: queued, Index: 0, Offset: 0, Size: 10, State: "uploaded"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	var list []apiv1.Job
+	if err := c.Do(ctx, http.MethodGet, "/v1/jobs?state=queued,failed&storage=offsite", nil, &list); err != nil || len(list) != 2 {
+		t.Fatalf("jobs = %+v, %v", list, err)
+	}
+	var detail apiv1.JobDetail
+	if err := c.Do(ctx, http.MethodGet, fmt.Sprintf("/v1/jobs/%d", queued), nil, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.VMID != 100 || len(detail.Segments) != 1 || len(detail.Events) != 1 || detail.Events[0].ToState != "queued" {
+		t.Fatalf("detail = %+v", detail)
+	}
+
+	var j apiv1.Job
+	if err := c.Do(ctx, http.MethodPost, fmt.Sprintf("/v1/jobs/%d/cancel", queued), nil, &j); err != nil || j.State != "cancelled" {
+		t.Fatalf("cancel = %+v, %v", j, err)
+	}
+	if err := c.Do(ctx, http.MethodPost, fmt.Sprintf("/v1/jobs/%d/retry", failed), nil, &j); err != nil || j.State != "queued" || j.LastError != "" {
+		t.Fatalf("retry = %+v, %v", j, err)
+	}
+	if err := c.Do(ctx, http.MethodPost, fmt.Sprintf("/v1/jobs/%d/retry", failed), nil, nil); !client.IsCode(err, apiv1.CodeConflict) {
+		t.Fatalf("retry a queued job: %v", err)
+	}
+	if err := c.Do(ctx, http.MethodPost, fmt.Sprintf("/v1/jobs/%d/priority", failed), map[string]int{"priority": 7}, &j); err != nil || j.Priority != 7 {
+		t.Fatalf("priority = %+v, %v", j, err)
+	}
+	if err := c.Do(ctx, http.MethodPost, fmt.Sprintf("/v1/jobs/%d/priority", failed), map[string]int{"priority": 1000}, nil); !client.IsCode(err, apiv1.CodeInvalidArgument) {
+		t.Fatalf("out of range priority: %v", err)
+	}
+	for path, code := range map[string]string{"/v1/jobs/999": apiv1.CodeNotFound, "/v1/jobs/abc": apiv1.CodeInvalidArgument, "/v1/jobs?limit=0": apiv1.CodeInvalidArgument} {
+		if err := c.Do(ctx, http.MethodGet, path, nil, nil); !client.IsCode(err, code) {
+			t.Errorf("%s: %v", path, err)
+		}
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/config"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/discovery"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/storages"
@@ -38,7 +39,7 @@ const (
 )
 
 // Job states counted as running work in status reports.
-var activeStates = []string{"preparing", "uploading", "verifying", "committing", "transferring", "deleting"}
+var activeStates = append(slices.Clone(jobs.ActiveStates), "transferring", "deleting")
 
 // Options configures the daemon.
 type Options struct {
@@ -65,6 +66,7 @@ type Daemon struct {
 	api        *api.Server
 	storages   *storages.Manager
 	discovery  *discovery.Discoverer
+	scheduler  *jobs.Scheduler
 	startedAt  time.Time
 	instanceID string
 	problems   []string
@@ -140,7 +142,14 @@ func Run(ctx context.Context, opts Options) error {
 		Inotify: ncfg.Inotify, ScanInterval: ncfg.ScanInterval,
 		OnJob: func(id int64, state string) {
 			d.api.Events().Publish("job.updated", apiv1.JobUpdate{ID: id, State: state})
+			if d.scheduler != nil && state == jobs.StateQueued {
+				d.scheduler.Wake()
+			}
 		},
+	})
+	d.scheduler = jobs.New(jobs.Options{
+		Log: d.log, Store: st, Node: opts.Node, Workers: ncfg.UploadWorkers, Targets: d.storages.Targets,
+		OnUpdate: func(u apiv1.JobUpdate) { d.api.Events().Publish("job.updated", u) },
 	})
 	if err := d.storages.Reload(ctx); err != nil {
 		d.log.Warn("load storage configuration", "err", err)
@@ -148,6 +157,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.routes()
 	d.storageRoutes()
 	d.discoveryRoutes()
+	d.jobRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
