@@ -11,7 +11,7 @@ export CGO_ENABLED ?= 0
 
 BINARIES := pve-rclone-backupd pve-rclone-backup
 
-.PHONY: all build test race integration lint fmt vet clean
+.PHONY: all build test race integration perl-test lint fmt vet clean
 
 all: build
 
@@ -33,6 +33,11 @@ race:
 # backends; they need no network access.
 integration:
 	$(GO) test -tags integration -count=1 ./...
+
+# Perl plugin tests run against Proxmox VE's real storage library in a
+# container (needs docker).
+perl-test:
+	test/perl/run.sh
 
 fmt:
 	gofmt -w $$(git ls-files '*.go')

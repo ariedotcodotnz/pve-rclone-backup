@@ -1,0 +1,18 @@
+# TrueNAS (truenas/truenas-proxmox-plugin)
+tn_api_scheme
+tn_broker_timeout
+# ProxS3 (sol1/proxs3)
+endpoint
+bucket
+region
+access-key
+secret-key
+use-https
+cache-dir
+# SSHFS example (pve-storage-plugin-examples)
+sshfs-private-key
+sshfs-remote-path
+# LINSTOR (LINBIT/linstor-proxmox)
+controller
+resourcegroup
+statuscache
