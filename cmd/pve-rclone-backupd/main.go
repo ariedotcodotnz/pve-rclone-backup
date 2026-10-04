@@ -113,6 +113,7 @@ func main() {
 		Locker:    locker,
 		AllowUIDs: append([]uint32{0}, allowUIDs...),
 	})
+	transport.Shutdown()
 	if err != nil {
 		log.Error("daemon failed", "err", err)
 		os.Exit(1)

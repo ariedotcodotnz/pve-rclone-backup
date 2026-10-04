@@ -12,6 +12,7 @@ import (
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
+	"github.com/rclone/rclone/lib/atexit"
 )
 
 // Options configures the process-wide rclone engine.
@@ -88,9 +89,18 @@ func Init(opts Options) error {
 	// granularity in our own job state, not inside rclone.
 	ci.MultiThreadStreams = 0
 
+	// rclone installs a SIGINT/SIGTERM handler that runs its exit hooks
+	// and calls os.Exit as soon as anything registers one (every upload
+	// does). The daemon shuts down gracefully itself and calls Shutdown.
+	atexit.IgnoreSignals()
+
 	initDone = true
 	return nil
 }
+
+// Shutdown runs rclone's exit hooks (cleanup of interrupted transfers).
+// Call it once the daemon has stopped using the transport.
+func Shutdown() { atexit.Run() }
 
 // RcloneVersion reports the version of the embedded rclone engine.
 func RcloneVersion() string {

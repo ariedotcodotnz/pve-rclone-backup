@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -349,4 +351,26 @@ func TestPlainTargetVerifiesProviderHash(t *testing.T) {
 			t.Fatalf("%s: VerifySegment = %v, %v", p.remote, ok, err)
 		}
 	}
+}
+
+// The daemon handles SIGTERM itself: uploads must not install rclone's
+// signal handler, which would exit the process immediately.
+func TestUploadsDoNotTakeOverSignals(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	crypted, _, _ := newCryptTarget(t, "base32")
+	src := bytes.NewReader([]byte("segment"))
+	if _, err := crypted.PutSegment(t.Context(), "sig/part.000000", Segment{Source: src, Size: 7, ModTime: time.Now()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sigs:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGTERM not delivered to the application")
+	}
+	time.Sleep(200 * time.Millisecond) // rclone's handler would have exited by now
 }
