@@ -60,6 +60,11 @@ func ProfileFor(backend string) (Profile, error) {
 	return p, nil
 }
 
+// RegisterProfile adds a profile for a backend that only tests use (such
+// as the fault-injecting wrapper). It must be called before the transport
+// is used concurrently, typically from TestMain.
+func RegisterProfile(p Profile) { profiles[p.Backend] = p }
+
 // SupportedBackends lists backends with a profile.
 func SupportedBackends() []string { return []string{"onedrive"} }
 

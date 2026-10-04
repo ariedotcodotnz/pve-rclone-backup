@@ -28,6 +28,8 @@ var Storage = transport.NewMemoryStorage()
 // InitTransport initializes the rclone engine for a test binary; call it
 // from TestMain and run the returned cleanup after the tests.
 func InitTransport() (func(), error) {
+	transport.RegisterProfile(transport.Profile{Backend: "faulty", MaxPathLength: 4096, MaxNameLength: 255,
+		FilenameEncoding: "base32768", Tested: true})
 	dir, err := os.MkdirTemp("", "pve-rclone-backup-repotest-")
 	if err != nil {
 		return nil, err
@@ -74,7 +76,7 @@ func Loader(keys ...*secrets.RepoKeys) repo.KeyLoader {
 				return k, nil
 			}
 		}
-		return nil, fmt.Errorf("no keys for %s", uuid)
+		return nil, fmt.Errorf("%w: %s", secrets.ErrNotFound, uuid)
 	}
 }
 

@@ -15,10 +15,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/config"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/storages"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/version"
@@ -28,6 +33,7 @@ import (
 const (
 	DefaultSocket   = "/run/pve-rclone-backup/api.sock"
 	DefaultStateDir = "/var/lib/pve-rclone-backup"
+	DefaultPVEDir   = "/etc/pve"
 )
 
 // Job states counted as running work in status reports.
@@ -40,6 +46,12 @@ type Options struct {
 	StateDir  string
 	Node      string   // PVE node name (default: short host name)
 	AllowUIDs []uint32 // API peers allowed (default: root)
+	// PVEDir is the cluster file system root holding storage.cfg and the
+	// cluster-wide daemon configuration (default /etc/pve).
+	PVEDir string
+	// Keys loads repository keys (nil: no keys are available). The rclone
+	// engine must have been initialized with the remote store beforehand.
+	Keys repo.KeyLoader
 	// Ready, if set, is called once the API is accepting connections.
 	Ready func()
 }
@@ -50,6 +62,7 @@ type Daemon struct {
 	opts       Options
 	store      *store.Store
 	api        *api.Server
+	storages   *storages.Manager
 	startedAt  time.Time
 	instanceID string
 	problems   []string
@@ -80,6 +93,12 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.Node == "" {
 		opts.Node = NodeName()
 	}
+	if opts.PVEDir == "" {
+		opts.PVEDir = DefaultPVEDir
+	}
+	if opts.Keys == nil {
+		opts.Keys = func(string) (*secrets.RepoKeys, error) { return nil, secrets.ErrNotFound }
+	}
 	d := &Daemon{log: opts.Logger, opts: opts, startedAt: time.Now(), instanceID: rand.Text()}
 
 	st, err := d.openStore(ctx)
@@ -99,7 +118,21 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	d.api = api.New(api.Options{Logger: d.log, AllowUIDs: opts.AllowUIDs, Idempotency: st})
+	dcfg := d.loadDaemonConfig()
+	d.storages = storages.New(storages.Options{
+		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Keys: opts.Keys,
+		AboutInterval: dcfg.AboutInterval, ResyncInterval: dcfg.CatalogResyncInterval,
+		OnChange: func(id string) {
+			if s, ok := d.storages.Get(id); ok {
+				d.api.Events().Publish("storage.status", s)
+			}
+		},
+	})
+	if err := d.storages.Reload(ctx); err != nil {
+		d.log.Warn("load storage configuration", "err", err)
+	}
 	d.routes()
+	d.storageRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
@@ -112,6 +145,12 @@ func Run(ctx context.Context, opts Options) error {
 	defer stopServe()
 	errc := make(chan error, 1)
 	go func() { errc <- d.api.Serve(serveCtx, l) }()
+	var workers sync.WaitGroup
+	defer func() { // stop background work before the store is closed
+		stopServe()
+		workers.Wait()
+	}()
+	workers.Go(func() { d.storages.Run(serveCtx) })
 
 	if opts.Ready != nil {
 		opts.Ready()
@@ -132,6 +171,25 @@ func Run(ctx context.Context, opts Options) error {
 	d.log.Info("shutting down")
 	stopServe()
 	return <-errc
+}
+
+// loadDaemonConfig reads the cluster-wide daemon configuration; problems
+// are reported and the defaults used.
+func (d *Daemon) loadDaemonConfig() *config.DaemonConfig {
+	path := filepath.Join(d.opts.PVEDir, "pve-rclone-backup", "daemon.cfg")
+	raw, err := os.ReadFile(path) //nolint:gosec // fixed path below the PVE directory
+	if errors.Is(err, os.ErrNotExist) {
+		return config.DefaultDaemonConfig()
+	}
+	if err == nil {
+		var c *config.DaemonConfig
+		if c, err = config.ParseDaemonConfig(raw); err == nil {
+			return c
+		}
+	}
+	d.log.Warn("daemon configuration unusable; using defaults", "path", path, "err", err)
+	d.problems = append(d.problems, fmt.Sprintf("%s: %v", path, err))
+	return config.DefaultDaemonConfig()
 }
 
 func (d *Daemon) watchdog(ctx context.Context, iv time.Duration) {

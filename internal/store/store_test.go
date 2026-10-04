@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -30,7 +31,7 @@ func TestOpenCreatesLatestSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, ok, err := s.Meta(t.Context(), "schema_version")
-	if err != nil || !ok || v != "1" || LatestSchemaVersion() != 1 {
+	if err != nil || !ok || v != strconv.Itoa(LatestSchemaVersion()) || LatestSchemaVersion() != 2 {
 		t.Fatalf("schema_version = %q %v %v", v, ok, err)
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
@@ -45,7 +46,7 @@ func TestOpenCreatesLatestSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if _, err := os.Stat(path + ".pre-1"); !errors.Is(err, os.ErrNotExist) {
+	if m, _ := filepath.Glob(path + ".pre-*"); len(m) != 0 {
 		t.Fatal("no-op open wrote a pre-migration copy")
 	}
 }
@@ -318,6 +319,37 @@ func TestCatalog(t *testing.T) {
 	}
 	if _, err := s.GetStorage(ctx, "offsite"); !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
+	}
+}
+
+func TestRepositories(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	const a, b = "6f0c2f1e-3a7b-4c2d-9e8f-0123456789ab", "7a1d3e2f-4b8c-4d3e-8f90-123456789abc"
+	if _, err := s.FindRepository(ctx, "od", "pve-backups"); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	if err := s.PutRepository(ctx, &Repository{UUID: a, Remote: "od", BasePath: "pve-backups", Encryption: "crypt"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.FindRepository(ctx, "od", "pve-backups"); err != nil || r.UUID != a || r.Encryption != "crypt" {
+		t.Fatalf("repository = %+v, %v", r, err)
+	}
+	// A new repository at the same location replaces the old record.
+	if err := s.PutRepository(ctx, &Repository{UUID: b, Remote: "od", BasePath: "pve-backups", Encryption: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.FindRepository(ctx, "od", "pve-backups"); err != nil || r.UUID != b {
+		t.Fatalf("repository = %+v, %v", r, err)
+	}
+	if err := s.PutRepository(ctx, &Repository{UUID: b, Remote: "od", BasePath: "elsewhere", Encryption: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FindRepository(ctx, "od", "pve-backups"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("moved repository still found at its old location")
+	}
+	if err := s.PutRepository(ctx, &Repository{UUID: a, Remote: "od", BasePath: "x", Encryption: "bogus"}); err == nil {
+		t.Fatal("invalid encryption mode accepted")
 	}
 }
 

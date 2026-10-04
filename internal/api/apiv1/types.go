@@ -4,7 +4,10 @@
 // on the daemon's unix socket. Changes within v1 must be additive.
 package apiv1
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ClientAPIHeader carries the API revision a client speaks. Clients that
 // send an unsupported revision are refused with CodeIncompatibleVersion.
@@ -95,4 +98,104 @@ type Event struct {
 	Type string    `json:"type"`
 	Time time.Time `json:"time"`
 	Data any       `json:"data,omitempty"`
+}
+
+// Storage is an rclone-backup storage as served by this node.
+type Storage struct {
+	ID            string     `json:"id"`
+	Remote        string     `json:"remote"`
+	Path          string     `json:"path"`
+	Source        string     `json:"source"`
+	Encryption    string     `json:"encryption"`
+	ReplicateFrom []string   `json:"replicate_from"`
+	Enabled       bool       `json:"enabled"` // configured for this node and not disabled
+	Active        bool       `json:"active"`  // the catalogue can be served
+	Health        string     `json:"health"`
+	HealthDetail  string     `json:"health_detail,omitempty"`
+	ConfigError   string     `json:"config_error,omitempty"`
+	RepoUUID      string     `json:"repo_uuid,omitempty"`
+	Generation    int        `json:"generation,omitzero"`
+	LastResyncAt  *time.Time `json:"last_resync_at,omitempty"`
+	Usage         *Usage     `json:"usage,omitempty"`
+}
+
+// Storage health values.
+const (
+	HealthOK            = "ok"
+	HealthOpening       = "opening"        // not opened yet since start or reconfiguration
+	HealthDegraded      = "degraded"       // throttled by the provider
+	HealthUnreachable   = "unreachable"    // network or provider failure
+	HealthAuthRequired  = "auth_required"  // the remote must be reconnected
+	HealthQuotaExceeded = "quota_exceeded" // the remote is full
+	HealthMisconfigured = "misconfigured"  // configuration, keys or repository identity are wrong
+	HealthUninitialized = "uninitialized"  // no repository at the configured location
+	HealthDisabled      = "disabled"       // disabled or not configured for this node
+)
+
+// Usage is the quota of a storage's remote. Fields are nil when the
+// provider does not report them.
+type Usage struct {
+	Total     *int64    `json:"total,omitempty"`
+	Used      *int64    `json:"used,omitempty"`
+	Free      *int64    `json:"free,omitempty"`
+	Trashed   *int64    `json:"trashed,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// StorageStatus answers PVE's status() poll. It is served from cached state
+// only.
+type StorageStatus struct {
+	Total  int64  `json:"total"`
+	Avail  int64  `json:"avail"`
+	Used   int64  `json:"used"`
+	Active bool   `json:"active"`
+	Health string `json:"health"`
+}
+
+// Backup is a catalogue entry.
+type Backup struct {
+	Volname      string     `json:"volname"` // backup/<archive name>
+	VMType       string     `json:"vmtype"`
+	VMID         int        `json:"vmid"`
+	CTime        int64      `json:"ctime"` // backup time (Unix seconds)
+	Size         int64      `json:"size"`  // archive size
+	Format       string     `json:"format"`
+	Compression  string     `json:"compression,omitempty"`
+	State        string     `json:"state"`
+	Protected    bool       `json:"protected"`
+	Notes        string     `json:"notes,omitempty"`
+	GuestName    string     `json:"guest_name,omitempty"`
+	Generation   int        `json:"generation"`
+	UploadedAt   time.Time  `json:"uploaded_at"`
+	VerifyLevel  int        `json:"verify_level"`
+	VerifiedAt   *time.Time `json:"verified_at,omitempty"`
+	VerifyResult string     `json:"verify_result,omitempty"`
+	DeleteAfter  *time.Time `json:"delete_after,omitempty"`
+}
+
+// BackupDetail adds the manifest to a catalogue entry.
+type BackupDetail struct {
+	Backup
+	Manifest json.RawMessage `json:"manifest"`
+}
+
+// GuestConfig is the guest configuration recorded in a backup's manifest.
+type GuestConfig struct {
+	Config        string  `json:"config"`
+	Firewall      *string `json:"firewall"`
+	FirewallKnown bool    `json:"firewall_known"`
+}
+
+// ValidateRequest carries a storage.cfg section from PVE's storage hooks.
+// Config is the stored section (PVE's parsed form); for updates, Update
+// holds changed properties and Delete the removed ones.
+type ValidateRequest struct {
+	Config map[string]any `json:"config"`
+	Update map[string]any `json:"update,omitempty"`
+	Delete any            `json:"delete,omitempty"`
+}
+
+// ValidateResponse reports a successful validation.
+type ValidateResponse struct {
+	Warnings []string `json:"warnings,omitempty"`
 }

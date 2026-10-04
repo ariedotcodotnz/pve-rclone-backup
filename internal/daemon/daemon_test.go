@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
 )
 
 type env struct {
-	socket, stateDir string
+	socket, stateDir, pveDir string
+	keys                     repo.KeyLoader
 }
 
 func newEnv(t *testing.T) env {
@@ -28,7 +30,7 @@ func newEnv(t *testing.T) env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return env{socket: filepath.Join(dir, "run", "api.sock"), stateDir: filepath.Join(dir, "state")}
+	return env{socket: filepath.Join(dir, "run", "api.sock"), stateDir: filepath.Join(dir, "state"), pveDir: filepath.Join(dir, "pve")}
 }
 
 // start runs the daemon and returns a stop function that waits for exit.
@@ -42,6 +44,8 @@ func start(t *testing.T, e env) (stop func() error) {
 			Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Socket:    e.socket,
 			StateDir:  e.stateDir,
+			PVEDir:    e.pveDir,
+			Keys:      e.keys,
 			Node:      "pve-test",
 			AllowUIDs: []uint32{uint32(os.Getuid())},
 			Ready:     func() { close(ready) },

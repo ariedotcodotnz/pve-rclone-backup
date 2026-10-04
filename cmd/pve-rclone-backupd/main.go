@@ -13,12 +13,15 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/daemon"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/logging"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/version"
 )
@@ -47,6 +50,7 @@ func main() {
 		showVersion = flag.Bool("version", false, "print version information and exit")
 		socket      = flag.String("socket", daemon.DefaultSocket, "API socket path")
 		stateDir    = flag.String("state-dir", daemon.DefaultStateDir, "state directory")
+		pveDir      = flag.String("pve-dir", daemon.DefaultPVEDir, "root of the Proxmox VE cluster file system")
 		logLevel    = flag.String("log-level", "info", "log level: debug, info, warn, error")
 		logFormat   = flag.String("log-format", "text", "log format: text or json")
 		allowUIDs   uidList
@@ -74,6 +78,19 @@ func main() {
 	}
 	slog.SetDefault(log)
 
+	// Secrets live in pmxcfs's root-only priv directory, written under
+	// cluster locks. rclone reads and refreshes OAuth tokens through the
+	// remote store, so the engine is initialized with it before anything
+	// else touches rclone.
+	secretsDir := filepath.Join(*pveDir, "priv", "pve-rclone-backup")
+	locker := &cfs.Locker{Dir: filepath.Join(*pveDir, "priv", "lock")}
+	remotes := secrets.NewRemoteStore(secrets.RemotesPath(secretsDir), locker, log)
+	if err := transport.Init(transport.Options{ConfigPath: remotes.Path(), Storage: remotes, Logger: log.Handler()}); err != nil {
+		log.Error("initialize rclone engine", "err", err)
+		os.Exit(1)
+	}
+	keys := secrets.NewKeyStore(secretsDir, locker)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	// Configuration reload on SIGHUP arrives with the configuration watcher;
@@ -91,6 +108,8 @@ func main() {
 		Logger:    log,
 		Socket:    *socket,
 		StateDir:  *stateDir,
+		PVEDir:    *pveDir,
+		Keys:      keys.Load,
 		AllowUIDs: append([]uint32{0}, allowUIDs...),
 	})
 	if err != nil {
