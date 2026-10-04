@@ -110,6 +110,6 @@ func (a *App) backupCommand() *cobra.Command {
 		}
 		return nil
 	}}
-	cmd.AddCommand(list, inspect)
+	cmd.AddCommand(list, inspect, a.fetchCommand())
 	return cmd
 }

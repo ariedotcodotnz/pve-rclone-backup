@@ -63,13 +63,13 @@ func (d *Daemon) jobRoutes() {
 		}
 		return api.WriteJSON(w, http.StatusOK, detail)
 	})
-	action := func(do func(r *http.Request, id int64) error) api.HandlerFunc {
+	action := func(do func(r *http.Request, j *store.Job) error) api.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) error {
 			j, err := d.job(r)
 			if err != nil {
 				return err
 			}
-			if err := do(r, j.ID); err != nil {
+			if err := do(r, j); err != nil {
 				if errors.Is(err, jobs.ErrWrongState) {
 					return api.Errorf(http.StatusConflict, apiv1.CodeConflict, "job %d is %s", j.ID, j.State)
 				}
@@ -82,13 +82,13 @@ func (d *Daemon) jobRoutes() {
 			return api.WriteJSON(w, http.StatusOK, jobView(j))
 		}
 	}
-	d.api.HandleIdempotent("POST /v1/jobs/{id}/cancel", action(func(r *http.Request, id int64) error {
-		return d.scheduler.Cancel(r.Context(), id)
+	d.api.HandleIdempotent("POST /v1/jobs/{id}/cancel", action(func(r *http.Request, j *store.Job) error {
+		return d.schedulerFor(j.Kind).Cancel(r.Context(), j.ID)
 	}))
-	d.api.HandleIdempotent("POST /v1/jobs/{id}/retry", action(func(r *http.Request, id int64) error {
-		return d.scheduler.Retry(r.Context(), id)
+	d.api.HandleIdempotent("POST /v1/jobs/{id}/retry", action(func(r *http.Request, j *store.Job) error {
+		return d.schedulerFor(j.Kind).Retry(r.Context(), j.ID)
 	}))
-	d.api.HandleIdempotent("POST /v1/jobs/{id}/priority", action(func(r *http.Request, id int64) error {
+	d.api.HandleIdempotent("POST /v1/jobs/{id}/priority", action(func(r *http.Request, j *store.Job) error {
 		var req struct {
 			Priority *int `json:"priority"`
 		}
@@ -98,7 +98,7 @@ func (d *Daemon) jobRoutes() {
 		if req.Priority == nil || *req.Priority < -100 || *req.Priority > 100 {
 			return api.Invalid("priority must be between -100 and 100")
 		}
-		return d.scheduler.SetPriority(r.Context(), id, *req.Priority)
+		return d.schedulerFor(j.Kind).SetPriority(r.Context(), j.ID, *req.Priority)
 	}))
 }
 

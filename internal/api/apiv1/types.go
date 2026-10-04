@@ -458,3 +458,23 @@ type BackupUpdate struct {
 	Notes     *string `json:"notes,omitempty"`
 	Protected *bool   `json:"protected,omitempty"`
 }
+
+// FetchRequest downloads an offsite backup into a local backup storage.
+type FetchRequest struct {
+	TargetStorage string `json:"target_storage"`
+	// Protect marks the fetched backup protected (default true), so the
+	// next local prune does not remove it.
+	Protect *bool `json:"protect,omitempty"`
+}
+
+// RestoreRequest restores a guest from an offsite backup.
+type RestoreRequest struct {
+	Storage       string `json:"storage"`
+	Volname       string `json:"volname"`        // backup/<archive>
+	Mode          string `json:"mode,omitempty"` // stream (VMs) or stage; default per guest type
+	TargetVMID    int    `json:"target_vmid"`
+	TargetStorage string `json:"target_storage,omitempty"`
+	Unique        bool   `json:"unique,omitzero"`
+	Force         bool   `json:"force,omitzero"`
+	AllowDamaged  bool   `json:"allow_damaged,omitzero"`
+}

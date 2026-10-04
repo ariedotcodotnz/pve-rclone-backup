@@ -7,8 +7,11 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -124,4 +127,16 @@ func Resync(ctx context.Context, st *store.Store, storeID string, r *repo.Repo, 
 		return nil, err
 	}
 	return rep, nil
+}
+
+// RemoteID returns the generation and identity of a catalogue entry from
+// its remote directory ("g<N>/v1/<source>/...").
+func RemoteID(b *store.Backup) (int, layout.BackupID, error) {
+	root, dir, ok := strings.Cut(b.RemoteDir, "/")
+	gen, err := strconv.Atoi(strings.TrimPrefix(root, "g"))
+	if !ok || err != nil || !strings.HasPrefix(root, "g") || gen < 1 {
+		return 0, layout.BackupID{}, fmt.Errorf("catalog: invalid remote directory %q", b.RemoteDir)
+	}
+	id, err := layout.ParseDir(dir)
+	return gen, id, err
 }

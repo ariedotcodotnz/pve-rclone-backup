@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
-	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/catalog"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -161,23 +160,12 @@ func (d *Daemon) pushDirty(ctx context.Context) {
 	}
 }
 
-// remoteID returns the generation and identity of a catalogue entry.
-func remoteID(b *store.Backup) (int, layout.BackupID, error) {
-	root, dir, ok := strings.Cut(b.RemoteDir, "/")
-	gen, err := strconv.Atoi(strings.TrimPrefix(root, "g"))
-	if !ok || err != nil || !strings.HasPrefix(root, "g") {
-		return 0, layout.BackupID{}, fmt.Errorf("invalid remote directory %q", b.RemoteDir)
-	}
-	id, err := layout.ParseDir(dir)
-	return gen, id, err
-}
-
 func (d *Daemon) pushOne(ctx context.Context, b *store.Backup) error {
 	rp, _, err := d.storages.Repo(b.StoreID)
 	if err != nil {
 		return err
 	}
-	gen, id, err := remoteID(b)
+	gen, id, err := catalog.RemoteID(b)
 	if err != nil {
 		return err
 	}

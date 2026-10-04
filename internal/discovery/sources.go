@@ -60,6 +60,12 @@ func ResolveSources(cfg *storagecfg.Config, targets []*config.Storage, node stri
 	return out
 }
 
+// ResolveDumpDir resolves the dump directory of one backup storage on this
+// node; nil means the storage is not available on this node.
+func ResolveDumpDir(cfg *storagecfg.Config, id, node string, mounted func(string) bool) *Source {
+	return resolve(cfg, id, node, mounted)
+}
+
 func resolve(cfg *storagecfg.Config, id, node string, mounted func(string) bool) *Source {
 	sec := cfg.Get(id)
 	if sec == nil {

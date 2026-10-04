@@ -29,6 +29,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/remotes"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/replicate"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/restore"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/storages"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -44,7 +45,7 @@ const (
 )
 
 // Job states counted as running work in status reports.
-var activeStates = append(slices.Clone(jobs.ActiveStates), "transferring", "deleting")
+var activeStates = append(slices.Clone(jobs.ActiveStates), "deleting")
 
 // Options configures the daemon.
 type Options struct {
@@ -63,6 +64,8 @@ type Options struct {
 	Keys repo.KeyLoader
 	// Locker takes cluster-wide locks (default: pmxcfs locks below PVEDir).
 	Locker secrets.Locker
+	// RestoreTools overrides the PVE commands restores run (tests).
+	RestoreTools *restore.Tools
 	// Ready, if set, is called once the API is accepting connections.
 	Ready func()
 }
@@ -82,6 +85,8 @@ type Daemon struct {
 	storages   *storages.Manager
 	discovery  *discovery.Discoverer
 	scheduler  *jobs.Scheduler
+	fetches    *jobs.Scheduler
+	restores   *jobs.Scheduler
 	remotes    *remotes.Manager
 	keyStore   KeyStore
 	ledger     *recoverykit.Ledger
@@ -193,6 +198,22 @@ func Run(ctx context.Context, opts Options) error {
 		},
 		OnUpdate: func(u apiv1.JobUpdate) { d.api.Events().Publish("job.updated", u) },
 	})
+	restorer := restore.New(restore.Options{
+		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Repos: d.storages.Repo,
+		StagingDir: ncfg.StagingDir, StagingReserve: ncfg.StagingReserve,
+		Tools: d.restoreTools(ncfg),
+	})
+	restorer.CleanStaging()
+	for kind, sched := range map[string]**jobs.Scheduler{"fetch": &d.fetches, "restore": &d.restores} {
+		*sched = jobs.New(jobs.Options{
+			Log: d.log, Store: st, Node: opts.Node, Kind: kind, Workers: 1, Targets: d.storages.Targets, Runner: restorer,
+			Ready: func(id string) error {
+				_, _, err := d.storages.Repo(id)
+				return err
+			},
+			OnUpdate: func(u apiv1.JobUpdate) { d.api.Events().Publish("job.updated", u) },
+		})
+	}
 	if err := d.storages.Reload(ctx); err != nil {
 		d.log.Warn("load storage configuration", "err", err)
 	}
@@ -203,6 +224,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.remoteRoutes()
 	d.setupRoutes()
 	d.backupRoutes()
+	d.restoreRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {
@@ -223,6 +245,8 @@ func Run(ctx context.Context, opts Options) error {
 	workers.Go(func() { d.storages.Run(serveCtx) })
 	workers.Go(func() { d.discovery.Run(serveCtx) })
 	workers.Go(func() { d.scheduler.Run(serveCtx) })
+	workers.Go(func() { d.fetches.Run(serveCtx) })
+	workers.Go(func() { d.restores.Run(serveCtx) })
 	workers.Go(func() { d.pushMeta(serveCtx) })
 
 	if opts.Ready != nil {
@@ -282,6 +306,13 @@ func (d *Daemon) loadNodeConfig() *config.NodeConfig {
 	d.log.Warn("node configuration unusable; using defaults", "path", path, "err", err)
 	d.problems = append(d.problems, fmt.Sprintf("%s: %v", path, err))
 	return config.DefaultNodeConfig()
+}
+
+func (d *Daemon) restoreTools(ncfg *config.NodeConfig) restore.Tools {
+	if d.opts.RestoreTools != nil {
+		return *d.opts.RestoreTools
+	}
+	return restore.Tools{IOnice: ioniceArgs(ncfg.RestoreIOnice)}
 }
 
 // replicationReady reports whether archives may be queued for a storage:

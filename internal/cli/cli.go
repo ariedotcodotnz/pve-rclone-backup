@@ -138,7 +138,7 @@ func (a *App) rootCommand() *cobra.Command {
 	f.StringVarP(&a.Output, "output", "o", a.Output, "output format: table or json")
 	f.BoolVarP(&a.Yes, "yes", "y", false, "do not ask for confirmation")
 	root.AddCommand(a.versionCommand(), a.statusCommand(), a.doctorCommand(), a.remoteCommand(), a.storageCommand(),
-		a.queueCommand(), a.backupCommand(), a.kitCommand(), a.configCommand())
+		a.queueCommand(), a.backupCommand(), a.restoreCommand(), a.kitCommand(), a.configCommand())
 	return root
 }
 

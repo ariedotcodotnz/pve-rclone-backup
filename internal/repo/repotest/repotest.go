@@ -107,6 +107,10 @@ type Backup struct {
 	Notes       string
 	Protected   bool
 	Log         string
+	// Content replaces the pseudo-random archive data (Size is ignored).
+	Content []byte
+	// Ext is the archive extension (default vma.zst or tar.zst).
+	Ext string
 }
 
 func (b *Backup) defaults() {
@@ -140,7 +144,10 @@ func (b Backup) ID() layout.BackupID {
 }
 
 func (b Backup) ext() string {
-	if b.VMType == "lxc" {
+	switch {
+	case b.Ext != "":
+		return b.Ext
+	case b.VMType == "lxc":
 		return "tar.zst"
 	}
 	return "vma.zst"
@@ -149,6 +156,9 @@ func (b Backup) ext() string {
 // Data returns the archive bytes of the backup.
 func (b Backup) Data() []byte {
 	b.defaults()
+	if b.Content != nil {
+		return b.Content
+	}
 	data := make([]byte, b.Size)
 	rng := rand.New(rand.NewPCG(b.Seed, uint64(b.VMID)))
 	for i := range data {
@@ -169,6 +179,7 @@ func Upload(t testing.TB, r *repo.Repo, b Backup) *manifest.Manifest {
 		t.Fatal(err)
 	}
 	data := b.Data()
+	b.Size = int64(len(data))
 	src := bytes.NewReader(data)
 	count := max(1, int((b.Size+b.SegmentSize-1)/b.SegmentSize))
 	whole := transport.NewWholeHashState()
@@ -193,12 +204,16 @@ func Upload(t testing.TB, r *repo.Repo, b Backup) *manifest.Manifest {
 		t.Fatal(err)
 	}
 	ext := b.ext()
+	parsed, err := layout.ParseArchiveName(fmt.Sprintf("vzdump-%s-%d-%s.%s", b.VMType, b.VMID, id.TSLabel, ext))
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := &manifest.Manifest{
 		Format: manifest.FormatManifest, Version: 1, RepoUUID: r.UUID(), Generation: gen,
 		Backup: manifest.BackupInfo{Source: b.Source, SourceUUID: b.SourceUUID, VMType: b.VMType, VMID: b.VMID,
 			TSLabel: id.TSLabel, BackupTime: b.Time.Unix(), CollisionIndex: b.Collision, Volname: id.Volname(ext)},
 		Archive: manifest.ArchiveInfo{Filename: fmt.Sprintf("vzdump-%s-%d-%s.%s", b.VMType, b.VMID, id.TSLabel, ext),
-			Format: map[string]string{"qemu": "vma", "lxc": "tar"}[b.VMType], Compression: "zst",
+			Format: parsed.Format, Compression: parsed.Compression,
 			Size: b.Size, SHA256: sum, SourceStorage: "local", SourceNode: "pve1", SourceMtime: b.Time.UTC()},
 		Segments:           manifest.Segments{Size: b.SegmentSize, Count: count, Naming: "part.%06d", List: segs},
 		Guest:              manifest.GuestInfo{Name: b.GuestName, Config: b.Config, FirewallKnown: true},

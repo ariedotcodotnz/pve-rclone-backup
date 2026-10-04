@@ -20,29 +20,36 @@ const (
 	StateUploading  = "uploading"
 	StateVerifying  = "verifying"
 	StateCommitting = "committing"
-	StateComplete   = "complete"
-	StateRetryWait  = "retry_wait"
-	StateFailed     = "failed"
-	StateCancelled  = "cancelled"
-	StateSourceLost = "source_lost"
+	// Fetch and restore jobs.
+	StateTransferring = "transferring"
+	StateApplying     = "applying"
+	StateComplete     = "complete"
+	StateRetryWait    = "retry_wait"
+	StateFailed       = "failed"
+	StateCancelled    = "cancelled"
+	StateSourceLost   = "source_lost"
 )
 
 // ActiveStates are states of a job a worker is executing.
-var ActiveStates = []string{StatePreparing, StateUploading, StateVerifying, StateCommitting}
+var ActiveStates = []string{StatePreparing, StateUploading, StateVerifying, StateCommitting, StateTransferring, StateApplying}
 
 // transitions lists the legal state changes. Active states may return to
 // queued when the daemon stops.
 var transitions = map[string][]string{
-	StateQueued:     {StatePreparing, StateSuperseded, StateCancelled},
-	StateRetryWait:  {StatePreparing, StateQueued, StateSuperseded, StateCancelled},
-	StatePreparing:  {StateUploading, StateComplete, StateRetryWait, StateFailed, StateSourceLost, StateCancelled, StateQueued},
-	StateUploading:  {StateVerifying, StateRetryWait, StateFailed, StateSourceLost, StateCancelled, StateQueued},
-	StateVerifying:  {StateUploading, StateCommitting, StateRetryWait, StateFailed, StateSourceLost, StateCancelled, StateQueued},
-	StateCommitting: {StateComplete, StateRetryWait, StateFailed, StateSourceLost, StateCancelled, StateQueued},
-	StateFailed:     {StateQueued},
-	StateCancelled:  {StateQueued},
-	StateSkipped:    {StateQueued},
-	StateSuperseded: {StateQueued},
+	StateQueued:    {StatePreparing, StateSuperseded, StateCancelled},
+	StateRetryWait: {StatePreparing, StateQueued, StateSuperseded, StateCancelled},
+	StatePreparing: {StateUploading, StateTransferring, StateComplete, StateRetryWait, StateFailed, StateSourceLost,
+		StateCancelled, StateQueued},
+	StateUploading: {StateVerifying, StateRetryWait, StateFailed, StateSourceLost, StateCancelled, StateQueued},
+	StateVerifying: {StateUploading, StateCommitting, StateApplying, StateComplete, StateRetryWait, StateFailed,
+		StateSourceLost, StateCancelled, StateQueued},
+	StateTransferring: {StateVerifying, StateRetryWait, StateFailed, StateCancelled, StateQueued},
+	StateApplying:     {StateComplete, StateFailed, StateCancelled, StateQueued},
+	StateCommitting:   {StateComplete, StateRetryWait, StateFailed, StateSourceLost, StateCancelled, StateQueued},
+	StateFailed:       {StateQueued},
+	StateCancelled:    {StateQueued},
+	StateSkipped:      {StateQueued},
+	StateSuperseded:   {StateQueued},
 }
 
 // CanTransition reports whether a job may move from one state to another.

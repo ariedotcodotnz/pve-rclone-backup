@@ -23,6 +23,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/recoverykit"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/restore"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 )
 
@@ -40,6 +41,8 @@ func TestMain(m *testing.M) {
 // cluster is a PVE directory, dump directory and running daemon.
 type cluster struct {
 	t        *testing.T
+	tools    string
+	target   string
 	pveDir   string
 	dump     string
 	socket   string
@@ -55,14 +58,26 @@ func startCluster(t *testing.T) *cluster {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	c := &cluster{t: t, pveDir: filepath.Join(dir, "pve"), dump: filepath.Join(dir, "backups", "dump"), socket: filepath.Join(dir, "run", "api.sock")}
-	for _, d := range []string{filepath.Join(c.pveDir, "priv", "lock"), c.dump} {
+	c := &cluster{t: t, pveDir: filepath.Join(dir, "pve"), dump: filepath.Join(dir, "backups", "dump"), socket: filepath.Join(dir, "run", "api.sock"),
+		tools: filepath.Join(dir, "tools"), target: filepath.Join(dir, "restored", "dump")}
+	for _, d := range []string{filepath.Join(c.pveDir, "priv", "lock"), c.dump, c.tools, c.target} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	c.baseCfg = fmt.Sprintf("dir: backups\n\tpath %s\n\tcontent backup\n\n", filepath.Dir(c.dump))
+	c.baseCfg = fmt.Sprintf("dir: backups\n\tpath %s\n\tcontent backup\n\ndir: restored\n\tpath %s\n\tcontent backup\n\n"+
+		"lvmthin: local-lvm\n\tthinpool data\n\tvgname pve\n\tcontent images,rootdir\n\n", filepath.Dir(c.dump), filepath.Dir(c.target))
+	qmrestore := filepath.Join(c.tools, "qmrestore")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s/qmrestore.log\ncp \"$1\" %s/qmrestore.out\necho restored\n", c.tools, c.tools)
+	if err := os.WriteFile(qmrestore, []byte(script), 0o700); err != nil { //nolint:gosec // test script must be executable
+		t.Fatal(err)
+	}
 	c.writeCfg(c.baseCfg)
+	nodeCfg := filepath.Join(c.pveDir, "nodes", "pve1", "pve-rclone-backup.cfg")
+	_ = os.MkdirAll(filepath.Dir(nodeCfg), 0o700)
+	if err := os.WriteFile(nodeCfg, []byte("staging-dir: "+filepath.Join(dir, "staging")+"\nstaging-reserve: 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	locker := &cfs.Locker{Dir: filepath.Join(c.pveDir, "priv", "lock")}
 	keys := secrets.NewKeyStore(filepath.Join(c.pveDir, "priv", "pve-rclone-backup"), locker)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,7 +85,8 @@ func startCluster(t *testing.T) *cluster {
 	go func() {
 		done <- daemon.Run(ctx, daemon.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Socket: c.socket,
 			StateDir: filepath.Join(dir, "state"), PVEDir: c.pveDir, Node: "pve1", KeyStore: keys, Locker: locker,
-			AllowUIDs: []uint32{uint32(os.Getuid())}, Ready: func() { close(ready) }})
+			RestoreTools: &restore.Tools{QMRestore: qmrestore},
+			AllowUIDs:    []uint32{uint32(os.Getuid())}, Ready: func() { close(ready) }})
 	}()
 	select {
 	case <-ready:
@@ -209,6 +225,29 @@ func TestCLIEndToEnd(t *testing.T) {
 	}
 	if r := c.run("storage", "resync", "offsite"); r.code != 0 {
 		t.Fatalf("resync: %s", r.err)
+	}
+
+	// Fetch into another local storage and restore through qmrestore.
+	pollInterval = 50 * time.Millisecond
+	if r := c.run("backup", "fetch", volid, "--to-storage", "restored"); r.code != 0 || !strings.Contains(r.out, "complete") {
+		t.Fatalf("fetch (%d): %s%s", r.code, r.out, r.err)
+	}
+	fetched := filepath.Join(c.target, "vzdump-qemu-100-2026_10_04-02_00_01.vma.zst")
+	if got, err := os.ReadFile(fetched); err != nil || !bytes.Equal(got, bytes.Repeat([]byte("vma"), 5000)) {
+		t.Fatalf("fetched archive: %v", err)
+	}
+	if _, err := os.Stat(fetched + ".protected"); err != nil {
+		t.Fatal("fetched archive not protected")
+	}
+	if r := c.run("restore", volid, "--vmid", "900", "--target-storage", "local-lvm", "--mode", "stage"); r.code != 0 ||
+		!strings.Contains(r.err, "qmrestore: restored") {
+		t.Fatalf("restore (%d): %s%s", r.code, r.out, r.err)
+	}
+	if args, _ := os.ReadFile(filepath.Join(c.tools, "qmrestore.log")); !strings.Contains(string(args), " 900 --storage local-lvm") {
+		t.Fatalf("qmrestore args = %q", args)
+	}
+	if r := c.run("restore", volid, "--vmid", "901", "--mode", "bogus"); r.code != ExitError || !strings.Contains(r.err, "not available") {
+		t.Fatalf("invalid mode (%d): %s", r.code, r.err)
 	}
 
 	plugin := filepath.Join(t.TempDir(), "RcloneBackupPlugin.pm")
