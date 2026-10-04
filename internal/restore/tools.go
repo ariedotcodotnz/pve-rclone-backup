@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -97,8 +98,33 @@ func (l *logLines) last() string {
 	return l.tail[len(l.tail)-1]
 }
 
+// feed connects src to a process through an OS pipe. os/exec would
+// otherwise copy src itself and report a failure to read src as the
+// process's failure; the caller learns about src errors on its own.
+func feed(src io.Reader) (*os.File, error) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		_, _ = io.Copy(pw, src)
+		_ = pw.Close()
+	}()
+	return pr, nil
+}
+
 // command runs argv with stdin and records its output.
 func (r *Runner) command(ctx context.Context, t *jobs.Task, stdin io.Reader, argv ...string) error {
+	if stdin != nil {
+		if _, ok := stdin.(*os.File); !ok {
+			pr, err := feed(stdin)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = pr.Close() }()
+			stdin = pr
+		}
+	}
 	argv = append(append([]string{}, r.opts.Tools.IOnice...), argv...)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed PVE tools with validated arguments
 	cmd.Stdin = stdin
@@ -137,8 +163,13 @@ func (r *Runner) pipeline(ctx context.Context, t *jobs.Task, src io.Reader, comp
 	if d == nil {
 		return r.command(ctx, t, src, argv...)
 	}
+	in, err := feed(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
 	dec := exec.CommandContext(ctx, d[0], d[1:]...) //nolint:gosec // fixed decompressor commands
-	dec.Stdin = src
+	dec.Stdin = in
 	dec.WaitDelay = 30 * time.Second
 	var decErr strings.Builder
 	dec.Stderr = &limitWriter{w: &decErr, n: 4096}

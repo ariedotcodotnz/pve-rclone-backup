@@ -393,9 +393,17 @@ func (r *Runner) restore(ctx context.Context, t *jobs.Task, s *source, p Restore
 	if existed && !p.Force {
 		return jobs.Permanent(fmt.Errorf("guest %d exists; choose another VMID or overwrite it with force", p.TargetVMID))
 	}
+	// Only a guest seen here is overwritten: one created meanwhile makes
+	// the restore tool refuse rather than replace it.
+	p.Force = existed
 	switch {
+	case p.Mode == "stream" && vmtype == "qemu" && existed:
+		// Streaming would replace the guest's disks before the archive's
+		// digest is known.
+		_ = t.Event(ctx, "info", fmt.Sprintf("guest %d is overwritten only after the archive has been downloaded and verified", p.TargetVMID))
+		return r.staged(ctx, t, s, p, vmtype)
 	case p.Mode == "stream" && vmtype == "qemu":
-		return r.streamVM(ctx, t, s, p, existed)
+		return r.streamVM(ctx, t, s, p)
 	case p.Mode == "stage":
 		return r.staged(ctx, t, s, p, vmtype)
 	}
@@ -416,10 +424,11 @@ func restoreArgs(p RestoreParams) []string {
 	return args
 }
 
-// streamVM pipes the archive through the decompressor into qmrestore;
-// nothing is staged. A digest mismatch at the end fails the restore and
-// removes a guest that did not exist before.
-func (r *Runner) streamVM(ctx context.Context, t *jobs.Task, s *source, p RestoreParams, existed bool) error {
+// streamVM pipes the archive through the decompressor into qmrestore for
+// a new guest; nothing is staged. If qmrestore succeeds but the archive
+// does not match its digest, the guest it just created is removed. If
+// qmrestore fails, it cleans up itself: the guest might not be ours.
+func (r *Runner) streamVM(ctx context.Context, t *jobs.Task, s *source, p RestoreParams) error {
 	if err := t.Advance(ctx, jobs.StateTransferring, fmt.Sprintf("streaming into qmrestore as VM %d", p.TargetVMID), nil); err != nil {
 		return err
 	}
@@ -439,10 +448,10 @@ func (r *Runner) streamVM(ctx context.Context, t *jobs.Task, s *source, p Restor
 	if errors.Is(cerr, io.ErrClosedPipe) {
 		cerr = nil // qmrestore stopped reading; its error explains why
 	}
+	if runErr == nil && cerr != nil {
+		r.removeGuest(t, p.TargetVMID)
+	}
 	if cerr != nil || runErr != nil {
-		if !existed && !errIsCancel(runErr) {
-			r.removeGuest(t, p.TargetVMID)
-		}
 		return jobs.Permanent(errors.Join(runErr, cerr))
 	}
 	size := s.m.Archive.Size

@@ -41,13 +41,14 @@ func TestMain(m *testing.M) {
 }
 
 type env struct {
-	t       *testing.T
-	rp      *repo.Repo
-	st      *store.Store
-	pveDir  string
-	dump    string
-	tools   string // directory of fake PVE tools and their logs
-	staging string
+	t             *testing.T
+	failQMRestore bool
+	rp            *repo.Repo
+	st            *store.Store
+	pveDir        string
+	dump          string
+	tools         string // directory of fake PVE tools and their logs
+	staging       string
 }
 
 // fakeTool writes a script that logs its arguments and stores its input
@@ -128,7 +129,7 @@ func (e *env) run(kind, volname string, params any) *store.Job {
 	runner := New(Options{Log: log, Store: e.st, Node: "pve1", PVEDir: e.pveDir, StagingDir: e.staging,
 		Repos:   func(string) (*repo.Repo, *config.Storage, error) { return e.rp, &config.Storage{ID: "offsite"}, nil },
 		Mounted: func(string) bool { return false },
-		Tools:   Tools{QMRestore: e.fakeTool("qmrestore", 1, false), PCT: e.fakeTool("pct", 3, false), QM: e.fakeTool("qm", 0, false)}})
+		Tools:   Tools{QMRestore: e.fakeTool("qmrestore", 1, e.failQMRestore), PCT: e.fakeTool("pct", 3, false), QM: e.fakeTool("qm", 0, false)}})
 	s := jobs.New(jobs.Options{Log: log, Store: e.st, Node: "pve1", Kind: kind, Workers: 1, Runner: runner, Poll: 20 * time.Millisecond,
 		Targets: func() []*config.Storage { return []*config.Storage{{ID: "offsite", Remote: "r", Transfers: 1}} }})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -231,32 +232,75 @@ func TestStreamRestore(t *testing.T) {
 	if j := e.run("restore", vol, RestoreParams{Mode: "stream", TargetVMID: 500}); j.State != jobs.StateFailed || !strings.Contains(j.LastError, "exists") {
 		t.Fatalf("restore over an existing guest = %+v", j)
 	}
+	// Overwriting verifies the archive before qmrestore replaces the guest.
+	_ = os.Remove(filepath.Join(e.tools, "qmrestore.log"))
 	if j := e.run("restore", vol, RestoreParams{Mode: "stream", TargetVMID: 500, Force: true}); j.State != jobs.StateComplete {
 		t.Fatalf("forced restore = %+v", j)
+	}
+	if got := e.toolLog("qmrestore"); strings.HasPrefix(got, "- ") || !strings.HasSuffix(got, " 500 --force 1\n") {
+		t.Fatalf("overwrite was not staged: qmrestore %q", got)
+	}
+	// A new VMID never gets --force, even if asked for.
+	_ = os.Remove(filepath.Join(e.tools, "qmrestore.log"))
+	if j := e.run("restore", vol, RestoreParams{Mode: "stream", TargetVMID: 903, Force: true}); j.State != jobs.StateComplete ||
+		strings.Contains(e.toolLog("qmrestore"), "--force") {
+		t.Fatalf("restore to a new VMID with force: %+v, qmrestore %q", j, e.toolLog("qmrestore"))
 	}
 	if j := e.run("restore", vol, RestoreParams{Mode: "stream", TargetVMID: 901, TargetStorage: "isos"}); j.State != jobs.StateFailed {
 		t.Fatalf("restore to a storage without images = %+v", j)
 	}
 }
 
-func TestStreamRestoreIntegrityFailureRemovesGuest(t *testing.T) {
+func TestStreamRestoreIntegrityFailure(t *testing.T) {
 	e := newEnv(t)
 	vma := make([]byte, 200<<10) // incompressible: several segments
 	_, _ = rand.NewChaCha8([32]byte{1}).Read(vma)
-	b := repotest.Backup{VMID: 100, Content: gz(t, vma), Ext: "vma.gz", SegmentSize: 16 << 10}
-	e.write(b)
-	// Replace a stored segment with other bytes of the same size.
+
+	// Corruption in the middle stops the stream: qmrestore fails and cleans
+	// up itself.
+	mid := repotest.Backup{VMID: 100, Content: gz(t, vma), Ext: "vma.gz", SegmentSize: 16 << 10}
+	e.write(mid)
 	tgt, _ := e.rp.Target(1)
-	part := b.ID().Path(layout.PartName(1))
-	if _, err := tgt.PutBytes(t.Context(), part, bytes.Repeat([]byte{0x55}, 16<<10)); err != nil {
+	if _, err := tgt.PutBytes(t.Context(), mid.ID().Path(layout.PartName(1)), bytes.Repeat([]byte{0x55}, 16<<10)); err != nil {
 		t.Fatal(err)
 	}
-	j := e.run("restore", b.ID().Volname("vma.gz"), RestoreParams{Mode: "stream", TargetVMID: 902})
+	j := e.run("restore", mid.ID().Volname("vma.gz"), RestoreParams{Mode: "stream", TargetVMID: 902})
 	if j.State != jobs.StateFailed || !strings.Contains(j.LastError, "segment 1") {
 		t.Fatalf("restore of a tampered backup = %+v", j)
 	}
-	if got := e.toolLog("qm"); got != "destroy 902 --purge 1\n" {
+	if got := e.toolLog("qm"); got != "" {
+		t.Fatalf("guest removed although qmrestore failed: qm %q", got)
+	}
+
+	// Corruption found only after qmrestore consumed everything: the guest
+	// it created is removed.
+	last := repotest.Backup{VMID: 101, Content: vma, Ext: "vma", SegmentSize: 64 << 10}
+	e.write(last)
+	tail := bytes.Repeat([]byte{0x55}, len(vma)-3*(64<<10))
+	if _, err := tgt.PutBytes(t.Context(), last.ID().Path(layout.PartName(3)), tail); err != nil {
+		t.Fatal(err)
+	}
+	j = e.run("restore", last.ID().Volname("vma"), RestoreParams{Mode: "stream", TargetVMID: 905})
+	if j.State != jobs.StateFailed || !strings.Contains(j.LastError, "segment 3") {
+		t.Fatalf("restore with a tampered last segment = %+v", j)
+	}
+	if got := e.toolLog("qm"); got != "destroy 905 --purge 1\n" {
 		t.Fatalf("guest not removed: qm %q", got)
+	}
+}
+
+// A failing qmrestore cleans up itself; the guest may belong to someone
+// else (created after the check), so it is never removed.
+func TestFailedQMRestoreRemovesNothing(t *testing.T) {
+	e := newEnv(t)
+	e.failQMRestore = true
+	b := repotest.Backup{VMID: 100, Content: gz(t, []byte("vma")), Ext: "vma.gz"}
+	e.write(b)
+	if j := e.run("restore", b.ID().Volname("vma.gz"), RestoreParams{Mode: "stream", TargetVMID: 904}); j.State != jobs.StateFailed {
+		t.Fatalf("restore with a failing qmrestore = %+v", j)
+	}
+	if got := e.toolLog("qm"); got != "" {
+		t.Fatalf("guest removed after qmrestore failed: qm %q", got)
 	}
 }
 
