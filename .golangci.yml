@@ -26,6 +26,10 @@ linters:
       - path: cmd/schemagen/
         linters: [gosec]
         text: "G304|G306"
+      # The store only concatenates "?" placeholder lists; values are always bound.
+      - path: internal/store/
+        linters: [gosec]
+        text: G202
 formatters:
   enable:
     - gofmt

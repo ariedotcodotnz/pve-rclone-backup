@@ -1,0 +1,250 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package store persists the daemon's operational state in SQLite.
+//
+// The database is a cache plus a work queue: remote manifests are the
+// authority for what exists offsite, and a lost or corrupt database is
+// rebuilt from them. It is therefore safe to move a damaged file aside.
+package store
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite" // database/sql driver "sqlite"
+)
+
+//go:embed migrations/*.sql
+var embeddedMigrations embed.FS
+
+// migrationFS holds the migrations directory; tests substitute it.
+var migrationFS fs.FS = embeddedMigrations
+
+var (
+	// ErrNewerSchema means the database was written by a newer daemon.
+	ErrNewerSchema = errors.New("store: database schema is newer than this daemon supports")
+	// ErrCorrupt means SQLite reported an integrity problem.
+	ErrCorrupt = errors.New("store: database is corrupt")
+)
+
+// Store is the daemon's state database.
+type Store struct {
+	db   *sql.DB
+	path string
+	now  func() time.Time
+}
+
+type migration struct {
+	version int
+	name    string
+	sql     string
+}
+
+func migrations() ([]migration, error) {
+	entries, err := fs.ReadDir(migrationFS, "migrations")
+	if err != nil {
+		return nil, err
+	}
+	var out []migration
+	for _, e := range entries {
+		num, _, ok := strings.Cut(e.Name(), "_")
+		v, err := strconv.Atoi(num)
+		if !ok || err != nil || !strings.HasSuffix(e.Name(), ".sql") {
+			return nil, fmt.Errorf("store: bad migration file name %q", e.Name())
+		}
+		b, err := fs.ReadFile(migrationFS, "migrations/"+e.Name())
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, migration{version: v, name: e.Name(), sql: string(b)})
+	}
+	slices.SortFunc(out, func(a, b migration) int { return a.version - b.version })
+	for i, m := range out {
+		if m.version != i+1 {
+			return nil, fmt.Errorf("store: migrations must be numbered 1..n without gaps, found %q", m.name)
+		}
+	}
+	return out, nil
+}
+
+// LatestSchemaVersion is the schema version this binary creates.
+func LatestSchemaVersion() int {
+	m, err := migrations()
+	if err != nil {
+		panic(err)
+	}
+	return len(m)
+}
+
+// Open opens (creating if needed) the database at path and migrates it to
+// the latest schema. Before migrating an existing database a consistent
+// copy is written next to it as <path>.pre-<version>.
+//
+// It returns ErrCorrupt when SQLite's integrity check fails and
+// ErrNewerSchema when the schema is newer than supported; the caller decides
+// whether to rebuild (see MoveAside).
+func Open(ctx context.Context, path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("store: create directory: %w", err)
+	}
+	dsn := "file:" + path +
+		"?_pragma=busy_timeout(5000)" +
+		"&_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(FULL)" +
+		"&_pragma=foreign_keys(ON)" +
+		"&_txlock=immediate"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	db.SetMaxOpenConns(4)
+	s := &Store{db: db, path: path, now: time.Now}
+
+	if err := s.checkIntegrity(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: chmod: %w", err)
+	}
+	if err := s.migrate(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Close closes the database.
+func (s *Store) Close() error { return s.db.Close() }
+
+// Path returns the database file path.
+func (s *Store) Path() string { return s.path }
+
+func (s *Store) checkIntegrity(ctx context.Context) error {
+	var res string
+	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&res); err != nil {
+		return fmt.Errorf("%w: %w", ErrCorrupt, err)
+	}
+	if res != "ok" {
+		return fmt.Errorf("%w: %s", ErrCorrupt, res)
+	}
+	return nil
+}
+
+func (s *Store) schemaVersion(ctx context.Context) (int, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'").Scan(&exists)
+	if err != nil || exists == 0 {
+		return 0, err
+	}
+	var v string
+	err = s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key = 'schema_version'").Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(v)
+}
+
+func (s *Store) migrate(ctx context.Context) error {
+	all, err := migrations()
+	if err != nil {
+		return err
+	}
+	current, err := s.schemaVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("store: read schema version: %w", err)
+	}
+	if current > len(all) {
+		return fmt.Errorf("%w (database %d, supported %d)", ErrNewerSchema, current, len(all))
+	}
+	if current == len(all) {
+		return nil
+	}
+	if current > 0 {
+		backup := fmt.Sprintf("%s.pre-%d", s.path, len(all))
+		_ = os.Remove(backup)
+		if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", backup); err != nil {
+			return fmt.Errorf("store: copy database before migration: %w", err)
+		}
+	}
+	for _, m := range all[current:] {
+		err := s.Tx(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, m.sql); err != nil {
+				return fmt.Errorf("apply %s: %w", m.name, err)
+			}
+			_, err := tx.ExecContext(ctx,
+				"INSERT INTO meta (key, value) VALUES ('schema_version', ?) "+
+					"ON CONFLICT (key) DO UPDATE SET value = excluded.value", strconv.Itoa(m.version))
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("store: migrate: %w", err)
+		}
+	}
+	return nil
+}
+
+// Tx runs fn in a write transaction (BEGIN IMMEDIATE) and commits it if fn
+// returns nil.
+func (s *Store) Tx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// Meta returns a value from the meta table.
+func (s *Store) Meta(ctx context.Context, key string) (string, bool, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key = ?", key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return v, err == nil, err
+}
+
+// SetMeta stores a value in the meta table.
+func (s *Store) SetMeta(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+		key, value)
+	return err
+}
+
+// MoveAside renames a database that cannot be used (corrupt or newer) to
+// <path>.<reason>-<unix time>, together with its WAL files, so a fresh one
+// can be created and rebuilt from the remote repositories.
+func MoveAside(path, reason string, now time.Time) (string, error) {
+	dst := fmt.Sprintf("%s.%s-%d", path, reason, now.Unix())
+	if err := os.Rename(path, dst); err != nil {
+		return "", fmt.Errorf("store: move %s aside: %w", path, err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Rename(path+suffix, dst+suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return dst, fmt.Errorf("store: move %s aside: %w", path+suffix, err)
+		}
+	}
+	return dst, nil
+}
+
+func (s *Store) unix() int64 { return s.now().Unix() }
