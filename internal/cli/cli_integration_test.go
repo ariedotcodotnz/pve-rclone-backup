@@ -122,7 +122,7 @@ func (c *cluster) pvesh(_ context.Context, args ...string) ([]byte, error) {
 		opts[strings.TrimPrefix(args[i], "--")] = args[i+1]
 	}
 	section := fmt.Sprintf("%s: %s\n", opts["type"], opts["storage"])
-	for _, k := range []string{"rclone-remote", "rclone-path", "rclone-source", "rclone-encryption", "rclone-replicate-from", "content"} {
+	for _, k := range []string{"rclone-remote", "rclone-path", "rclone-source", "rclone-encryption", "rclone-replicate-from", "rclone-immutable", "content"} {
 		if v, ok := opts[k]; ok {
 			section += fmt.Sprintf("\t%s %s\n", k, v)
 		}
@@ -293,7 +293,8 @@ func TestCLIEndToEnd(t *testing.T) {
 		t.Fatalf("recover (%d): %s%s", r.code, r.out, r.err)
 	}
 	dr.mu.Lock()
-	if got := strings.Join(dr.pveshLog[0], " "); !strings.Contains(got, "--storage offsite-dr") || strings.Contains(got, "replicate-from") {
+	if got := strings.Join(dr.pveshLog[0], " "); !strings.Contains(got, "--storage offsite-dr") || strings.Contains(got, "replicate-from") ||
+		!strings.HasSuffix(got, "--rclone-immutable 1") {
 		t.Fatalf("DR pvesh = %s", got)
 	}
 	dr.mu.Unlock()
@@ -310,6 +311,11 @@ func TestCLIEndToEnd(t *testing.T) {
 	}
 	if r := dr.run("recover", kitFile); r.code != 0 || !strings.Contains(r.out, "exists already") {
 		t.Fatalf("second recover (%d): %s%s", r.code, r.out, r.err)
+	}
+	// The recovered storage cannot delete the lost installation's backups.
+	if r := dr.run("backup", "delete", "offsite-dr:backup/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst", "--yes"); r.code == 0 ||
+		!strings.Contains(r.err, "immutable") {
+		t.Fatalf("delete on a recovered storage (%d): %s", r.code, r.err)
 	}
 	r = dr.run("storage", "init", "xx", "--remote", loc.Remote, "--source", "nosuch", "--read-only")
 	if r.code == 0 || !strings.Contains(r.err, `no source "nosuch"`) {

@@ -156,6 +156,12 @@ func (a *App) initStorage(ctx context.Context, id string, o initOpts) error {
 	if len(o.replicateFrom) > 0 {
 		pv = append(pv, "--rclone-replicate-from", strings.Join(o.replicateFrom, ","))
 	}
+	if o.readOnly {
+		// Uploads are already refused (the source belongs to another
+		// installation); the daemon also refuses every deletion and prune
+		// of an immutable storage.
+		pv = append(pv, "--rclone-immutable", "1")
+	}
 	if o.noPVESH {
 		fmt.Fprintln(a.Out, "Add the storage with:")
 		return a.pvesh(ctx, true, pv...)
@@ -179,7 +185,8 @@ The recovery kit holds the encryption keys. Without it, encrypted backups cannot
 after the loss of this host; replication only starts once the kit is confirmed.
 
 With --read-only, an existing repository is bound to browse and restore the backups of another
-installation (its --source) without replicating into it.`,
+installation (its --source): the storage replicates nothing and is immutable, so nothing in it can be
+deleted or pruned.`,
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if o.remote == "" || o.source == "" {

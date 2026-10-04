@@ -45,8 +45,10 @@ pve-rclone-backup remote add onedrive-main     # or: remote reconnect onedrive-m
 
 ## 3. Check the recovered storage
 
-The storage is read-only: nothing is uploaded into the lost installation's namespace. Its catalogue
-is rebuilt from the backups' manifests in the cloud, so no database from the old host is needed.
+The storage is read-only: nothing is uploaded into the lost installation's namespace, and it is
+immutable (`rclone-immutable 1`), so none of its backups can be deleted or pruned through it. Its
+catalogue is rebuilt from the backups' manifests in the cloud, so no database from the old host is
+needed.
 
 ```sh
 pve-rclone-backup storage show offsite-dr
