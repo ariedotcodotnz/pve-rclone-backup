@@ -75,6 +75,7 @@ sub _serve($self, $server) {
             query => $query // '',
             client_api => $headers{'x-client-api'},
             body => length($body) ? $json->decode($body) : undef,
+            raw => $body,
         };
         if (open(my $fh, '>>', $self->{log})) {
             print $fh $json->encode($req), "\n";

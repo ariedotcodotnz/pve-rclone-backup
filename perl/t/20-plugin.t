@@ -124,7 +124,8 @@ is($plugin->free_image('offsite', $scfg, $vol), undef, 'free_image returns no cl
 
 # Prune through PVE::Storage.
 my @log;
-my $pruned = PVE::Storage::prune_backups($cfg, 'offsite', { 'keep-daily' => 7 }, 100, 'qemu', 0,
+# The API hands over the VMID as a string.
+my $pruned = PVE::Storage::prune_backups($cfg, 'offsite', { 'keep-daily' => 7 }, '100', 'qemu', 0,
     sub { push @log, [@_] });
 is(scalar(@$pruned), 2, 'prune list returned');
 is_deeply([map { $_->{mark} } @$pruned], ['keep', 'remove'], 'prune marks');
@@ -150,6 +151,7 @@ my @patches = grep { $_->{method} eq 'PATCH' } @{ $d->requests };
 is_deeply([map { $_->{body} } @patches], [{ protected => JSON::false }, { notes => 'changed' }], 'PATCH bodies');
 is_deeply($by{'POST /v1/storages/offsite/prune'}->{body},
     { keep => { 'keep-daily' => 7 }, vmid => 100, type => 'qemu', dry_run => JSON::false }, 'prune request');
+like($by{'POST /v1/storages/offsite/prune'}->{raw}, qr/"vmid":100[,}]/, 'prune VMID sent as a JSON number');
 $d->stop;
 
 # A dead daemon makes the storage inactive without stalling pvestatd.

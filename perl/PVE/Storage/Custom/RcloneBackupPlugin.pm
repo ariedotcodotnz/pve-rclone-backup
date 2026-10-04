@@ -244,12 +244,10 @@ sub free_image($class, $storeid, $scfg, $volname, $isBase = undef, $format = und
 
 sub prune_backups($class, $scfg, $storeid, $keep, $vmid, $type, $dryrun, $logfunc) {
     $logfunc //= sub { print "$_[1]\n" };
-    my $res = _request('POST', _storage_path($storeid) . '/prune', timeout => 30, body => {
-        keep => $keep,
-        vmid => $vmid,
-        type => $type,
-        dry_run => $dryrun ? JSON::true : JSON::false,
-    }) // [];
+    my $body = { keep => $keep, type => $type, dry_run => $dryrun ? JSON::true : JSON::false };
+    # The API passes the VMID as a string; the daemon expects a number.
+    $body->{vmid} = _int($vmid) if defined($vmid);
+    my $res = _request('POST', _storage_path($storeid) . '/prune', timeout => 30, body => $body) // [];
     die "rclone-backup: unexpected prune result from daemon\n" if ref($res) ne 'ARRAY';
 
     my $list = [];
