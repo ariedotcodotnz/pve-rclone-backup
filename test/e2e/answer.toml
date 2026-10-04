@@ -1,0 +1,21 @@
+# Unattended installation of the nested test node (vm.sh fills in the
+# placeholders). The fixed time zone is not UTC on purpose: vzdump names
+# archives in local time.
+[global]
+keyboard = "en-us"
+country = "nz"
+fqdn = "pve-e2e.test.internal"
+mailto = "root@localhost"
+timezone = "Pacific/Auckland"
+root-password = "@PASSWORD@"
+root-ssh-keys = ["@SSHKEY@"]
+reboot-mode = "power-off"
+
+[network]
+source = "from-dhcp"
+
+[disk-setup]
+filesystem = "ext4"
+disk-list = ["vda"]
+lvm.swapsize = 1
+lvm.maxroot = 16

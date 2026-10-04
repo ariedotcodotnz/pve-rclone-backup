@@ -11,7 +11,7 @@ export CGO_ENABLED ?= 0
 
 BINARIES := pve-rclone-backupd pve-rclone-backup
 
-.PHONY: all build generate test race integration perl-test deb deb-test lint fmt vet clean
+.PHONY: all build generate test race integration perl-test deb deb-test e2e lint fmt vet clean
 
 all: build
 
@@ -56,12 +56,24 @@ deb:
 deb-test: deb
 	test/deb/run.sh dist/pve-rclone-backup_$(DEB_VERSION)_$(DEB_ARCH).deb
 
+# End-to-end tests on a nested Proxmox VE node (needs docker and /dev/kvm).
+# The first run installs PVE from the official ISO into a cached base
+# image (about 15 minutes); later runs boot a throwaway copy. E2E_KEEP=1
+# leaves the VM running afterwards (test/e2e/vm.sh ssh, vm.sh down).
+e2e: deb
+	test/e2e/vm.sh up
+	@eval "$$(test/e2e/vm.sh env)"; \
+	E2E_SSH=$$E2E_SSH E2E_SSH_KEY=$$E2E_SSH_KEY E2E_DEB=$(CURDIR)/dist/pve-rclone-backup_$(DEB_VERSION)_$(DEB_ARCH).deb \
+		$(GO) test -tags e2e -count=1 -timeout 120m -v ./test/e2e/; status=$$?; \
+	[ -n "$(E2E_KEEP)" ] || test/e2e/vm.sh down; exit $$status
+
 fmt:
 	gofmt -w $$(git ls-files '*.go')
 
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags integration ./...
+	$(GO) vet -tags e2e ./test/e2e/...
 
 lint: vet
 	$(GO) run ./cmd/schemagen -root . -check

@@ -4,8 +4,9 @@ Offsite replication of Proxmox VE backups to rclone-supported cloud storage.
 Microsoft OneDrive Personal is the first target.
 
 > **Status: pre-alpha, under active development.** Replication, verification, retention, fetch and
-> restore work through the CLI and the TUI, and `make deb` builds an installable package. It has not
-> yet been tested on a real PVE host or against a real OneDrive account.
+> restore work through the CLI and the TUI, and `make deb` builds an installable package. It passes
+> an end-to-end suite on a nested Proxmox VE 9.2 node (`make e2e`). It has not yet been tested
+> against a real OneDrive account.
 
 ## How it works
 
@@ -71,7 +72,15 @@ make test       # unit tests; make integration, make perl-test for more
 make lint
 make deb        # dist/pve-rclone-backup_<version>_amd64.deb
 make deb-test   # install, use and purge the package in a PVE storage library container
+make e2e        # end-to-end on a nested Proxmox VE 9.2 node (see below)
 ```
+
+`make e2e` installs Proxmox VE 9.2 unattended from the official ISO into a nested VM, then installs
+the package and runs backups, replication, the GUI's API calls, restores and failure scenarios
+against it (`test/e2e`). QEMU runs in a container with `/dev/kvm` passed through, so the host needs
+only Docker and hardware virtualisation. The first run builds a cached base image in
+`~/.cache/pve-rclone-backup/e2e` (about 15 minutes); later runs boot a throwaway copy of it.
+`test/e2e/vm.sh` starts, stops and opens a shell on the VM.
 
 Recovering without the original host is described in [docs/dr-runbook.md](docs/dr-runbook.md), and
 recovering with stock rclone only in [docs/manual-recovery.md](docs/manual-recovery.md).
