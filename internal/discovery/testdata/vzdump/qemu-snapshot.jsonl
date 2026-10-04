@@ -1,0 +1,10 @@
+{"ms":1757,"op":"create","name":"vzdump-qemu-100-2026_10_05-09_21_07.tmp","size":4096}
+{"ms":1879,"op":"create","name":"vzdump-qemu-100-2026_10_05-09_21_07.vma.dat","size":0}
+{"ms":1941,"op":"modify","name":"vzdump-qemu-100-2026_10_05-09_21_07.vma.dat","count":1466,"size":167814996}
+{"ms":4549,"op":"close_write","name":"vzdump-qemu-100-2026_10_05-09_21_07.vma.dat","size":167814996}
+{"ms":4555,"op":"moved_from","name":"vzdump-qemu-100-2026_10_05-09_21_07.vma.dat","cookie":2186}
+{"ms":4555,"op":"moved_to","name":"vzdump-qemu-100-2026_10_05-09_21_07.vma.zst","cookie":2186,"size":167814996}
+{"ms":4565,"op":"delete","name":"vzdump-qemu-100-2026_10_05-09_21_07.tmp"}
+{"ms":4573,"op":"create","name":"vzdump-qemu-100-2026_10_05-09_21_07.log","size":1066}
+{"ms":4573,"op":"modify","name":"vzdump-qemu-100-2026_10_05-09_21_07.log","count":1,"size":1066}
+{"ms":4573,"op":"close_write","name":"vzdump-qemu-100-2026_10_05-09_21_07.log","size":1066}

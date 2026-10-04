@@ -1,0 +1,10 @@
+{"ms":1568,"op":"create","name":"vzdump-lxc-200-2026_10_05-09_21_26.tmp","size":4096}
+{"ms":1995,"op":"create","name":"vzdump-lxc-200-2026_10_05-09_21_26.tar.dat","size":0}
+{"ms":2073,"op":"modify","name":"vzdump-lxc-200-2026_10_05-09_21_26.tar.dat","count":90,"size":8421820}
+{"ms":2175,"op":"close_write","name":"vzdump-lxc-200-2026_10_05-09_21_26.tar.dat","size":8421820}
+{"ms":2178,"op":"moved_from","name":"vzdump-lxc-200-2026_10_05-09_21_26.tar.dat","cookie":2403}
+{"ms":2178,"op":"moved_to","name":"vzdump-lxc-200-2026_10_05-09_21_26.tar.zst","cookie":2403,"size":8421820}
+{"ms":2321,"op":"delete","name":"vzdump-lxc-200-2026_10_05-09_21_26.tmp"}
+{"ms":2329,"op":"create","name":"vzdump-lxc-200-2026_10_05-09_21_26.log","size":726}
+{"ms":2329,"op":"modify","name":"vzdump-lxc-200-2026_10_05-09_21_26.log","count":1,"size":726}
+{"ms":2329,"op":"close_write","name":"vzdump-lxc-200-2026_10_05-09_21_26.log","size":726}

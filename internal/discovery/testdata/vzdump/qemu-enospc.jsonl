@@ -1,0 +1,9 @@
+{"ms":1566,"op":"create","name":"vzdump-qemu-100-2026_10_05-09_21_48.tmp","size":40}
+{"ms":2016,"op":"create","name":"vzdump-qemu-100-2026_10_05-09_21_48.vma.dat","size":0}
+{"ms":2054,"op":"modify","name":"vzdump-qemu-100-2026_10_05-09_21_48.vma.dat","count":175,"size":25161728}
+{"ms":3040,"op":"close_write","name":"vzdump-qemu-100-2026_10_05-09_21_48.vma.dat","size":25161728}
+{"ms":3053,"op":"delete","name":"vzdump-qemu-100-2026_10_05-09_21_48.vma.dat"}
+{"ms":3054,"op":"delete","name":"vzdump-qemu-100-2026_10_05-09_21_48.tmp"}
+{"ms":3063,"op":"create","name":"vzdump-qemu-100-2026_10_05-09_21_48.log","size":994}
+{"ms":3063,"op":"modify","name":"vzdump-qemu-100-2026_10_05-09_21_48.log","count":1,"size":994}
+{"ms":3063,"op":"close_write","name":"vzdump-qemu-100-2026_10_05-09_21_48.log","size":994}
