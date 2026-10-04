@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -151,5 +153,27 @@ func TestSmallDocuments(t *testing.T) {
 	md, _ := Encode(meta)
 	if _, err := DecodeMeta(md); err == nil {
 		t.Fatal("invalid tombstone state accepted")
+	}
+}
+
+func TestMetaOwner(t *testing.T) {
+	const repoUUID = "6f0c2f1e-3a7b-4c2d-9e8f-0123456789ab"
+	id := layout.BackupID{Source: "homelab", VMType: "qemu", VMID: 100, TSLabel: "2026_10_04-02_00_01"}
+	meta := NewMeta(time.Unix(0, 0))
+	meta.RepoUUID, meta.Generation, meta.Backup = repoUUID, 1, id.Dir()
+	if err := meta.CheckOwner(repoUUID, 1, id); err != nil {
+		t.Fatal(err)
+	}
+	other := id
+	other.VMID = 101
+	for name, check := range map[string]error{
+		"other backup":     meta.CheckOwner(repoUUID, 1, other),
+		"other generation": meta.CheckOwner(repoUUID, 2, id),
+		"other repository": meta.CheckOwner("7a1d3e2f-4b8c-4d3e-8f90-123456789abc", 1, id),
+		"unbound":          NewMeta(time.Unix(0, 0)).CheckOwner(repoUUID, 1, id),
+	} {
+		if !errors.Is(check, ErrMisplaced) {
+			t.Errorf("%s: %v", name, check)
+		}
 	}
 }

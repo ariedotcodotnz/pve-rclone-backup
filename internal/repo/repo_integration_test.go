@@ -37,7 +37,7 @@ func TestMain(m *testing.M) {
 
 func TestInitAndOpen(t *testing.T) {
 	loc, dir := repotest.Remote(t, nil)
-	if _, err := repo.Open(t.Context(), loc, repotest.Loader()); !errors.Is(err, repo.ErrNotInitialized) {
+	if _, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader()}); !errors.Is(err, repo.ErrNotInitialized) {
 		t.Fatalf("open before init: %v", err)
 	}
 	keys := repotest.NewKeys(t)
@@ -52,7 +52,7 @@ func TestInitAndOpen(t *testing.T) {
 		t.Fatalf("second init: %v", err)
 	}
 
-	opened, err := repo.Open(t.Context(), loc, repotest.Loader(keys))
+	opened, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader(keys)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +65,10 @@ func TestInitAndOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Open(t.Context(), loc, repotest.Loader(other)); !errors.Is(err, repo.ErrWrongKeys) {
+	if _, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader(other)}); !errors.Is(err, repo.ErrWrongKeys) {
 		t.Fatalf("open with other keys: %v", err)
 	}
-	if _, err := repo.Open(t.Context(), loc, repotest.Loader()); err == nil {
+	if _, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader()}); err == nil {
 		t.Fatal("open without keys succeeded")
 	}
 
@@ -118,10 +118,10 @@ func TestOpenDetectsWrongKeysWithoutKeyCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Open(t.Context(), loc, repotest.Loader(other)); !errors.Is(err, repo.ErrWrongKeys) {
+	if _, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader(other)}); !errors.Is(err, repo.ErrWrongKeys) {
 		t.Fatalf("open with other keys: %v", err)
 	}
-	if _, err := repo.Open(t.Context(), loc, repotest.Loader(keys)); err != nil {
+	if _, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader(keys)}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -137,10 +137,10 @@ func TestUnencryptedRepository(t *testing.T) {
 	}
 	b := repotest.Backup{Size: 70 << 10}
 	repotest.Write(t, r, b)
-	opened, err := repo.Open(t.Context(), loc, func(string) (*secrets.RepoKeys, error) {
+	opened, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "none", Keys: func(string) (*secrets.RepoKeys, error) {
 		t.Fatal("keys requested for an unencrypted repository")
 		return nil, nil
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +159,62 @@ func TestUnencryptedRepository(t *testing.T) {
 	scanned, err := opened.Scan(t.Context(), "homelab")
 	if err != nil || len(scanned) != 1 || scanned[0].State != repo.StateComplete {
 		t.Fatalf("scan = %+v, %v", scanned, err)
+	}
+	// A configuration expecting encryption never opens it.
+	if _, err := repo.Open(t.Context(), loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader()}); !errors.Is(err, repo.ErrEncryptionMismatch) {
+		t.Fatalf("open unencrypted repository as encrypted: %v", err)
+	}
+}
+
+// The plaintext marker is writable by anyone with access to the remote;
+// editing it must not turn off encryption or swap the repository.
+func TestOpenRejectsTamperedMarker(t *testing.T) {
+	loc, _ := repotest.Remote(t, nil)
+	keys := repotest.NewKeys(t)
+	if _, err := repo.Init(t.Context(), loc, repo.InitOptions{Keys: keys}); err != nil {
+		t.Fatal(err)
+	}
+	marker, base, err := repo.ReadMarker(t.Context(), loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader(keys), UUID: keys.RepoUUID}
+	if _, err := repo.Open(t.Context(), loc, opts); err != nil {
+		t.Fatal(err)
+	}
+	write := func(m *manifest.RepoMarker) {
+		t.Helper()
+		data, err := manifest.Encode(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := base.PutBytes(t.Context(), layout.MarkerName, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	downgraded := *marker
+	downgraded.Encryption = "none"
+	downgraded.Generations = []manifest.RepoGeneration{{ID: 1, Root: "g1", State: "active", CreatedAt: marker.CreatedAt}}
+	write(&downgraded)
+	if _, err := repo.Open(t.Context(), loc, opts); !errors.Is(err, repo.ErrEncryptionMismatch) {
+		t.Fatalf("open downgraded repository: %v", err)
+	}
+
+	replaced := *marker
+	replaced.RepoUUID = repo.NewUUID()
+	write(&replaced)
+	if _, err := repo.Open(t.Context(), loc, opts); !errors.Is(err, repo.ErrReplaced) {
+		t.Fatalf("open replaced repository: %v", err)
+	}
+
+	// A generation added to the marker without local keys is refused.
+	extra := *marker
+	extra.Generations = append(slices.Clone(marker.Generations), marker.Generations[0])
+	extra.Generations[1].ID, extra.Generations[1].Root = 2, "g2"
+	write(&extra)
+	if _, err := repo.Open(t.Context(), loc, opts); !errors.Is(err, repo.ErrWrongKeys) {
+		t.Fatalf("open with unknown generation: %v", err)
 	}
 }
 
@@ -316,6 +372,67 @@ func TestScanClassifiesBackups(t *testing.T) {
 	}
 	if ts := got[tombstoned.ID()]; ts.Meta == nil || ts.Meta.Tombstone == nil || !ts.Meta.Tombstone.DeleteAfter.Equal(day(10)) {
 		t.Errorf("tombstoned meta = %+v", ts.Meta)
+	}
+}
+
+// Objects can be copied between directories without the keys. A meta
+// document copied from a backup being deleted must not mark another backup
+// as deleting.
+func TestScanIgnoresTransplantedMeta(t *testing.T) {
+	r, _ := repotest.Init(t)
+	ctx := t.Context()
+	tgt, err := r.Target(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := repotest.Backup{VMID: 100, Size: 1 << 10, Notes: "keep me"}
+	repotest.Write(t, r, victim)
+	doomed := repotest.Backup{VMID: 101, Size: 1 << 10}
+	repotest.Write(t, r, doomed)
+	meta := manifest.NewMeta(time.Now())
+	meta.Tombstone = &manifest.Tombstone{RequestedAt: time.Now(), DeleteAfter: time.Now(), Reason: "retention", State: "deleting"}
+	if err := r.WriteMeta(ctx, 1, doomed.ID(), meta); err != nil {
+		t.Fatal(err)
+	}
+	// Copying the ciphertext decrypts to the same plaintext elsewhere.
+	data, err := tgt.ReadAll(ctx, doomed.ID().Path(layout.MetaName), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tgt.PutBytes(ctx, victim.ID().Path(layout.MetaName), data); err != nil {
+		t.Fatal(err)
+	}
+	// A manifest moved into the directory of guest 429 must not be
+	// mistaken for throttling and abort the scan.
+	m := repotest.Write(t, r, repotest.Backup{VMID: 428, Size: 1})
+	m429 := repotest.Backup{VMID: 429, Size: 1}
+	repotest.Upload(t, r, m429)
+	md, err := manifest.Encode(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tgt.PutBytes(ctx, m429.ID().Path(layout.ManifestName), md); err != nil {
+		t.Fatal(err)
+	}
+
+	scanned, err := r.Scan(ctx, "homelab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[int]repo.ScannedBackup{}
+	for _, b := range scanned {
+		states[b.ID.VMID] = b
+	}
+	if v := states[100]; v.State != repo.StateComplete || v.Meta != nil || len(v.Problems) != 1 ||
+		!strings.Contains(v.Problems[0], "belongs to another backup") {
+		t.Fatalf("victim: state %q, meta %+v, problems %v", v.State, v.Meta, v.Problems)
+	}
+	if states[101].State != repo.StateDeleting || states[429].State != repo.StateInvalid {
+		t.Fatalf("doomed %q, 429 %q", states[101].State, states[429].State)
+	}
+	// Deleting the victim replaces the foreign document with its own.
+	if err := r.Delete(ctx, 1, victim.ID(), "user"); err != nil {
+		t.Fatal(err)
 	}
 }
 

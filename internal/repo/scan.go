@@ -4,6 +4,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -124,11 +125,18 @@ func (r *Repo) scanBackup(ctx context.Context, t *transport.Target, gen int, id 
 		return slices.ContainsFunc(files, func(e transport.Entry) bool { return !e.Dir && e.Name == name })
 	}
 	if has(layout.MetaName) {
+		// A misplaced or unreadable meta document is ignored: only a meta
+		// document bound to this backup may mark it as being deleted.
+		// Any other error says nothing about this backup: the scan fails
+		// rather than classify it from incomplete information.
 		meta, err := r.ReadMeta(ctx, gen, id)
-		if err != nil {
-			b.Problems = append(b.Problems, "meta: "+err.Error())
-		} else {
+		switch {
+		case err == nil:
 			b.Meta = meta
+		case errors.Is(err, ErrInvalidDocument):
+			b.Problems = append(b.Problems, "meta: "+err.Error())
+		default:
+			return b, err
 		}
 	}
 	if b.Meta != nil && b.Meta.Tombstone != nil && b.Meta.Tombstone.State == "deleting" {
@@ -140,8 +148,13 @@ func (r *Repo) scanBackup(ctx context.Context, t *transport.Target, gen int, id 
 		return b, nil
 	}
 	m, err := r.ReadManifest(ctx, gen, id)
+	if transport.Classify(err) == transport.ClassNotFound {
+		// Removed since the listing (a deletion in progress elsewhere).
+		b.State = StateIncomplete
+		return b, nil
+	}
 	if err != nil {
-		if c := transport.Classify(err); c == transport.ClassTransient || c == transport.ClassThrottled || c == transport.ClassAuth {
+		if !errors.Is(err, ErrInvalidDocument) {
 			return b, err
 		}
 		b.State = StateInvalid

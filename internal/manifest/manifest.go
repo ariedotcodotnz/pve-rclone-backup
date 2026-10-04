@@ -279,14 +279,32 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
-// Meta is the mutable per-backup document.
+// Meta is the mutable per-backup document. Objects can be copied between
+// directories by anyone with access to the remote, even without the keys,
+// so a meta document names the backup it belongs to and readers reject it
+// anywhere else.
 type Meta struct {
-	Format    string     `json:"format"`
-	Version   int        `json:"version"`
-	Notes     string     `json:"notes,omitempty"`
-	Protected bool       `json:"protected,omitzero"`
-	Tombstone *Tombstone `json:"tombstone"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	Format     string     `json:"format"`
+	Version    int        `json:"version"`
+	RepoUUID   string     `json:"repo_uuid"`
+	Generation int        `json:"generation"`
+	Backup     string     `json:"backup"` // backup directory relative to the generation root
+	Notes      string     `json:"notes,omitempty"`
+	Protected  bool       `json:"protected,omitzero"`
+	Tombstone  *Tombstone `json:"tombstone"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// ErrMisplaced means a document describes another backup or repository
+// than the location it was read from.
+var ErrMisplaced = errors.New("manifest: document belongs to another backup")
+
+// CheckOwner verifies that a meta document belongs to a backup.
+func (m *Meta) CheckOwner(repoUUID string, gen int, id layout.BackupID) error {
+	if m.RepoUUID != repoUUID || m.Generation != gen || m.Backup != id.Dir() {
+		return fmt.Errorf("%w: meta of %q (generation %d of %s) found at %s", ErrMisplaced, m.Backup, m.Generation, m.RepoUUID, id)
+	}
+	return nil
 }
 
 // Tombstone marks a backup for deletion.

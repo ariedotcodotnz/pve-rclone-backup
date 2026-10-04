@@ -123,6 +123,9 @@ func (t *Target) PutBytes(ctx context.Context, remote string, data []byte) (*Seg
 	return t.PutSegment(ctx, remote, Segment{Source: bytes.NewReader(data), Size: int64(len(data)), ModTime: time.Now()}, nil)
 }
 
+// ErrTooLarge is returned by ReadAll for objects above the size limit.
+var ErrTooLarge = errors.New("transport: object exceeds the size limit")
+
 // ReadAll reads a whole object, refusing objects larger than limit.
 func (t *Target) ReadAll(ctx context.Context, remote string, limit int64) ([]byte, error) {
 	rc, err := t.Open(ctx, remote)
@@ -135,7 +138,7 @@ func (t *Target) ReadAll(ctx context.Context, remote string, limit int64) ([]byt
 		return nil, fmt.Errorf("transport: read %s: %w", remote, err)
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("transport: %s is larger than %d bytes", remote, limit)
+		return nil, fmt.Errorf("%w: %s is larger than %d bytes", ErrTooLarge, remote, limit)
 	}
 	return data, nil
 }

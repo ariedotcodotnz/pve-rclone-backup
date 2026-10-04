@@ -51,6 +51,10 @@ func TestClassify(t *testing.T) {
 		{&os.PathError{Op: "write", Path: "/x", Err: syscall.ENOSPC}, ClassLocalIO},
 		{fserrors.NoRetryError(errors.New("bad config")), ClassConfig},
 		{errors.New("something odd"), ClassUnknown},
+		{errors.New("HTTP error 429 (429 Too Many Requests) returned body"), ClassThrottled},
+		{errors.New("upload failed: status code: 429"), ClassThrottled},
+		{errors.New("transport: v1/homelab/qemu/429/2026_10_04-02_00_01/meta.json is larger than 1048576 bytes"), ClassUnknown},
+		{errors.New("read v1/homelab/lxc/4290/x: unexpected format"), ClassUnknown},
 	}
 	for _, c := range cases {
 		if got := Classify(c.err); got != c.want {

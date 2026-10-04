@@ -33,7 +33,26 @@ var (
 	ErrWrongKeys = errors.New("repo: the keys do not match this repository")
 	// ErrSourceTaken means another installation uses the source name.
 	ErrSourceTaken = errors.New("repo: the source name is registered by another installation")
+	// ErrEncryptionMismatch means the repository marker claims another
+	// encryption mode than the local configuration expects.
+	ErrEncryptionMismatch = errors.New("repo: the repository's encryption mode differs from the configuration")
+	// ErrInvalidDocument marks a document on the remote that cannot be
+	// used: unparsable, too large, or describing another backup.
+	ErrInvalidDocument = errors.New("repo: invalid document")
+	// ErrReplaced means the location holds another repository than the one
+	// recorded locally.
+	ErrReplaced = errors.New("repo: a different repository now exists at this location")
 )
+
+// readDocument reads a small document, marking oversized or undecryptable
+// objects as invalid documents rather than remote failures.
+func readDocument(ctx context.Context, t *transport.Target, remote string, limit int64) ([]byte, error) {
+	data, err := t.ReadAll(ctx, remote, limit)
+	if errors.Is(err, transport.ErrTooLarge) || transport.Classify(err) == transport.ClassIntegrity {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
+	}
+	return data, err
+}
 
 // sentinel is stored at each generation root to prove the data keys.
 const sentinel = "pve-rclone-backup key check v1\n"
@@ -52,8 +71,14 @@ type Repo struct {
 // UUID returns the repository UUID.
 func (r *Repo) UUID() string { return r.Marker.RepoUUID }
 
-// ActiveGeneration returns the generation new backups are written to.
+// ActiveGeneration returns the generation new backups are written to. For
+// encrypted repositories the local keys decide, not the remote marker.
 func (r *Repo) ActiveGeneration() int {
+	if r.Keys != nil {
+		if g, err := r.Keys.Active(); err == nil {
+			return g.ID
+		}
+	}
 	for i := len(r.Marker.Generations) - 1; i >= 0; i-- {
 		if r.Marker.Generations[i].State == "active" {
 			return r.Marker.Generations[i].ID
@@ -186,22 +211,55 @@ func ReadMarker(ctx context.Context, loc transport.RepoLocation) (*manifest.Repo
 	return m, base, nil
 }
 
+// OpenOptions configures Open. The plaintext marker is not authenticated:
+// anyone with access to the remote can edit it, so it must never decide on
+// its own whether data is encrypted or which repository this is.
+type OpenOptions struct {
+	// Encryption is the mode the local configuration expects: "crypt" or
+	// "none".
+	Encryption string
+	// Keys loads the keys of an encrypted repository.
+	Keys KeyLoader
+	// UUID, if set, is the repository UUID recorded locally; a marker with
+	// another UUID is refused.
+	UUID string
+}
+
 // Open opens a repository and verifies that the keys match every
 // generation before anything is decrypted.
-func Open(ctx context.Context, loc transport.RepoLocation, loadKeys KeyLoader) (*Repo, error) {
+func Open(ctx context.Context, loc transport.RepoLocation, opts OpenOptions) (*Repo, error) {
+	if opts.Encryption != "crypt" && opts.Encryption != "none" {
+		return nil, fmt.Errorf("repo: invalid expected encryption mode %q", opts.Encryption)
+	}
 	marker, base, err := ReadMarker(ctx, loc)
 	if err != nil {
 		return nil, err
 	}
+	if marker.Encryption != opts.Encryption {
+		return nil, fmt.Errorf("%w (configured %s, repository marker says %s)", ErrEncryptionMismatch, opts.Encryption, marker.Encryption)
+	}
+	if opts.UUID != "" && marker.RepoUUID != opts.UUID {
+		return nil, fmt.Errorf("%w (expected %s, found %s)", ErrReplaced, opts.UUID, marker.RepoUUID)
+	}
 	r := &Repo{Loc: loc, Marker: marker, base: base, gens: map[int]*transport.Target{}, now: time.Now}
 	if marker.Encryption == "crypt" {
-		if r.Keys, err = loadKeys(marker.RepoUUID); err != nil {
+		if opts.Keys == nil {
+			return nil, errors.New("repo: no key loader for an encrypted repository")
+		}
+		if r.Keys, err = opts.Keys(marker.RepoUUID); err != nil {
 			return nil, fmt.Errorf("repo: keys of repository %s: %w", marker.RepoUUID, err)
 		}
 		for _, mg := range marker.Generations {
 			if err := checkKeys(mg, r.Keys); err != nil {
 				return nil, err
 			}
+		}
+		active, err := r.Keys.Active()
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := marker.Generation(active.ID); !ok {
+			return nil, fmt.Errorf("%w: active key generation %d is not in the repository marker", ErrWrongKeys, active.ID)
 		}
 	}
 	for _, mg := range marker.Generations {
@@ -309,34 +367,49 @@ func (r *Repo) ReadManifest(ctx context.Context, gen int, id layout.BackupID) (*
 	if err != nil {
 		return nil, err
 	}
-	data, err := t.ReadAll(ctx, id.Path(layout.ManifestName), manifest.MaxManifestSize)
+	data, err := readDocument(ctx, t, id.Path(layout.ManifestName), manifest.MaxManifestSize)
 	if err != nil {
 		return nil, err
 	}
 	m, err := manifest.DecodeManifest(data)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
 	}
 	if m.Backup.ID() != id || m.RepoUUID != r.UUID() || m.Generation != gen {
-		return nil, fmt.Errorf("repo: manifest at %s describes %s in generation %d of %s", id, m.Backup.ID(), m.Generation, m.RepoUUID)
+		return nil, fmt.Errorf("%w: manifest at %s describes %s in generation %d of %s", ErrInvalidDocument, id, m.Backup.ID(), m.Generation, m.RepoUUID)
 	}
 	return m, nil
 }
 
 // ReadMeta reads a meta document; a missing one yields an empty document.
+// A document that belongs to another backup is refused with
+// ErrInvalidDocument (and manifest.ErrMisplaced).
 func (r *Repo) ReadMeta(ctx context.Context, gen int, id layout.BackupID) (*manifest.Meta, error) {
 	t, err := r.Target(gen)
 	if err != nil {
 		return nil, err
 	}
-	data, err := t.ReadAll(ctx, id.Path(layout.MetaName), manifest.MaxSmallDocSize)
+	data, err := readDocument(ctx, t, id.Path(layout.MetaName), manifest.MaxSmallDocSize)
 	if transport.Classify(err) == transport.ClassNotFound {
-		return manifest.NewMeta(r.now()), nil
+		return r.newMeta(gen, id), nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return manifest.DecodeMeta(data)
+	meta, err := manifest.DecodeMeta(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
+	}
+	if err := meta.CheckOwner(r.UUID(), gen, id); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
+	}
+	return meta, nil
+}
+
+func (r *Repo) newMeta(gen int, id layout.BackupID) *manifest.Meta {
+	meta := manifest.NewMeta(r.now())
+	meta.RepoUUID, meta.Generation, meta.Backup = r.UUID(), gen, id.Dir()
+	return meta
 }
 
 // WriteMeta replaces a backup's meta document.
@@ -346,6 +419,7 @@ func (r *Repo) WriteMeta(ctx context.Context, gen int, id layout.BackupID, meta 
 		return err
 	}
 	meta.Format, meta.Version, meta.UpdatedAt = manifest.FormatMeta, 1, r.now().UTC()
+	meta.RepoUUID, meta.Generation, meta.Backup = r.UUID(), gen, id.Dir()
 	data, err := manifest.Encode(meta)
 	if err != nil {
 		return err
@@ -390,7 +464,7 @@ func (r *Repo) Commit(ctx context.Context, m *manifest.Manifest, meta *manifest.
 		return fmt.Errorf("%w: commit %s: %s", transport.ErrIntegrity, id, problems[0])
 	}
 	if meta == nil {
-		meta = manifest.NewMeta(r.now())
+		meta = r.newMeta(m.Generation, id)
 	}
 	if err := r.WriteMeta(ctx, m.Generation, id, meta); err != nil {
 		return err
@@ -446,6 +520,11 @@ func (r *Repo) Delete(ctx context.Context, gen int, id layout.BackupID, reason s
 		return err
 	}
 	meta, err := r.ReadMeta(ctx, gen, id)
+	if errors.Is(err, ErrInvalidDocument) {
+		// A foreign or unreadable meta document carries nothing worth
+		// keeping; it is replaced by our own tombstone.
+		meta, err = r.newMeta(gen, id), nil
+	}
 	if err != nil {
 		return err
 	}

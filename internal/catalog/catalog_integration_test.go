@@ -137,7 +137,7 @@ func TestResyncRebuildsCatalogue(t *testing.T) {
 
 	// A fresh database rebuilt from a freshly opened repository holds the
 	// same catalogue.
-	reopened, err := repo.Open(ctx, r.Loc, repotest.Loader(r.Keys))
+	reopened, err := repo.Open(ctx, r.Loc, repo.OpenOptions{Encryption: "crypt", Keys: repotest.Loader(r.Keys), UUID: r.UUID()})
 	if err != nil {
 		t.Fatal(err)
 	}

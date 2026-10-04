@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -44,6 +45,10 @@ var (
 	authTexts  = []string{"invalid_grant", "AADSTS70000", "AADSTS700082", "AADSTS50173", "token has expired",
 		"couldn't fetch token", "expired_token", "re-authenticate", "config reconnect"}
 )
+
+// http429Re matches an HTTP 429 status in an error message, but not a 429
+// that is merely part of a path or name (such as guest ID 429).
+var http429Re = regexp.MustCompile(`(?i)\b429 too many requests\b|\b(?:http|status|status code|response|error)[: ]+429\b`)
 
 func containsAny(s string, needles []string) bool {
 	for _, n := range needles {
@@ -96,7 +101,7 @@ func Classify(err error) Class {
 	if _, ok := pacer.IsRetryAfter(err); ok {
 		return ClassThrottled
 	}
-	if containsAny(msg, throttle) || strings.Contains(msg, "429") {
+	if containsAny(msg, throttle) || http429Re.MatchString(msg) {
 		return ClassThrottled
 	}
 
