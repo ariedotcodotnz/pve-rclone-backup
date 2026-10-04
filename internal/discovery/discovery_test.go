@@ -453,10 +453,15 @@ func TestInotifyAndHook(t *testing.T) {
 	}
 	waitFor(t, func() bool { return f.states()["t1/"+filepath.Base(final)] == "queued" })
 
-	// The hook reports archives too (and duplicates are harmless).
+	// The hook reports archives too (and duplicates are harmless). A hard
+	// link creates the archive without an event inotify watches for.
 	other := filepath.Join(f.dump, "vzdump-lxc-200-2026_10_10-02_00_01.tar.zst")
-	write(t, other, "ct")
-	if err := os.Chtimes(other, future, future); err != nil {
+	staged := filepath.Join(filepath.Dir(f.dump), "staged")
+	write(t, staged, "ct")
+	if err := os.Chtimes(staged, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(staged, other); err != nil {
 		t.Fatal(err)
 	}
 	d.Notify(other)
