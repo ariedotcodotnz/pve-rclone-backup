@@ -10,9 +10,14 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rclone/rclone/backend/crypt"
+	"github.com/rclone/rclone/fs/config/configmap"
+	"github.com/rclone/rclone/fs/config/obscure"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
@@ -242,4 +247,32 @@ func Write(t testing.TB, r *repo.Repo, b Backup) *manifest.Manifest {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// CorruptStored flips a byte of the stored (encrypted) object behind
+// remote, a path below generation gen's crypt root, on the local directory
+// dir that Remote returned.
+func CorruptStored(t testing.TB, r *repo.Repo, dir string, gen int, remote string) {
+	t.Helper()
+	g, err := r.Keys.Generation(gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := crypt.NewCipher(configmap.Simple{
+		"password": obscure.MustObscure(g.Password), "password2": obscure.MustObscure(g.Password2),
+		"filename_encryption": g.FilenameEncryption, "filename_encoding": g.FilenameEncoding,
+		"directory_name_encryption": strconv.FormatBool(g.DirectoryNameEncryption), "suffix": g.Suffix,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, r.Loc.Path, transport.CryptRoot(gen), c.EncryptFileName(remote))
+	data, err := os.ReadFile(path) //nolint:gosec // test fixture below t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)/2] ^= 0x40                               // inside the first encrypted block, past the header
+	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
 }

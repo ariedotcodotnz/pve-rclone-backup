@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/rclone/rclone/backend/crypt"
 	onedriveapi "github.com/rclone/rclone/backend/onedrive/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fserrors"
@@ -72,7 +73,10 @@ func Classify(err error) Class {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return ClassCanceled
-	case errors.Is(err, ErrIntegrity), strings.Contains(err.Error(), "corrupted on transfer"):
+	case errors.Is(err, ErrIntegrity), strings.Contains(err.Error(), "corrupted on transfer"),
+		// Stored ciphertext that does not decrypt or authenticate.
+		errors.Is(err, crypt.ErrorEncryptedBadBlock), errors.Is(err, crypt.ErrorEncryptedBadMagic),
+		errors.Is(err, crypt.ErrorEncryptedFileTooShort), errors.Is(err, crypt.ErrorEncryptedFileBadHeader):
 		return ClassIntegrity
 	case errors.Is(err, fs.ErrorObjectNotFound), errors.Is(err, fs.ErrorDirNotFound):
 		return ClassNotFound

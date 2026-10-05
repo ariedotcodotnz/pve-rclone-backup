@@ -544,3 +544,36 @@ func TestDeleteResumesAfterCrash(t *testing.T) {
 		t.Fatalf("scan after resumed delete = %+v, %v", scanned, err)
 	}
 }
+
+// TestScanIsolatesCorruptDocuments: ciphertext of a meta or manifest
+// document that no longer authenticates affects that backup only; it must
+// not abort the scan of the whole source.
+func TestScanIsolatesCorruptDocuments(t *testing.T) {
+	r, dir := repotest.Init(t)
+	badMeta := repotest.Backup{VMID: 100, Size: 1 << 10}
+	repotest.Write(t, r, badMeta)
+	badManifest := repotest.Backup{VMID: 101, Size: 1 << 10}
+	repotest.Write(t, r, badManifest)
+	fine := repotest.Backup{VMID: 102, Size: 1 << 10}
+	repotest.Write(t, r, fine)
+	repotest.CorruptStored(t, r, dir, 1, badMeta.ID().Path(layout.MetaName))
+	repotest.CorruptStored(t, r, dir, 1, badManifest.ID().Path(layout.ManifestName))
+
+	scanned, err := r.Scan(t.Context(), "homelab")
+	if err != nil {
+		t.Fatalf("a corrupt document aborted the scan: %v", err)
+	}
+	states := map[int]repo.ScannedBackup{}
+	for _, b := range scanned {
+		states[b.ID.VMID] = b
+	}
+	if b := states[100]; b.State != repo.StateComplete || !b.MetaInvalid {
+		t.Errorf("corrupt meta: state %q, meta invalid %v, problems %v", b.State, b.MetaInvalid, b.Problems)
+	}
+	if b := states[101]; b.State != repo.StateInvalid {
+		t.Errorf("corrupt manifest: state %q, problems %v", b.State, b.Problems)
+	}
+	if b := states[102]; b.State != repo.StateComplete || b.MetaInvalid {
+		t.Errorf("intact backup: %+v", b)
+	}
+}

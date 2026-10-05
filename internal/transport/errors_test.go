@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rclone/rclone/backend/crypt"
 	onedriveapi "github.com/rclone/rclone/backend/onedrive/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fserrors"
@@ -38,6 +39,8 @@ func TestClassify(t *testing.T) {
 		{fmt.Errorf("upload: %w", context.DeadlineExceeded), ClassTransient},
 		{fmt.Errorf("x: %w", ErrIntegrity), ClassIntegrity},
 		{errors.New("corrupted on transfer: quickxor hashes differ"), ClassIntegrity},
+		{fmt.Errorf("read meta.json: %w", crypt.ErrorEncryptedBadBlock), ClassIntegrity},
+		{crypt.ErrorEncryptedBadMagic, ClassIntegrity},
 		{fmt.Errorf("stat: %w", fs.ErrorObjectNotFound), ClassNotFound},
 		{fs.ErrorDirNotFound, ClassNotFound},
 		{fserrors.FatalError(odErr("quotaLimitReached", "")), ClassQuota},
