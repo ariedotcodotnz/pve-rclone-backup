@@ -5,6 +5,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -295,7 +296,12 @@ func Run(ctx context.Context, opts Options) error {
 
 	select {
 	case err := <-errc:
-		return fmt.Errorf("api server: %w", err)
+		if ctx.Err() == nil {
+			return fmt.Errorf("api server stopped: %w", cmp.Or(err, errors.New("no error reported")))
+		}
+		// Shutting down: the server stopped first because its context
+		// is ctx's child. Handled below like any shutdown.
+		errc <- err
 	case <-ctx.Done():
 	}
 	_ = sdNotify("STOPPING=1")

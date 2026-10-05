@@ -320,3 +320,14 @@ func TestCancelledStartKeepsDatabase(t *testing.T) {
 	}
 }
 
+// TestShutdownIsClean: stopping the daemon returns no error, also when the
+// API server finishes shutting down before the daemon notices the signal.
+func TestShutdownIsClean(t *testing.T) {
+	e := newEnv(t)
+	for i := range 15 {
+		stop := start(t, e)
+		if err := stop(); err != nil {
+			t.Fatalf("shutdown %d: %v", i, err)
+		}
+	}
+}
