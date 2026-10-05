@@ -17,6 +17,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -251,12 +252,23 @@ func oauthRelay(ctx context.Context, name, state string) (*fs.ConfigOut, error) 
 		if err != nil {
 			return nil, err
 		}
-		if err := transport.RelayRedirect(ctx, pasted); err != nil {
-			fmt.Println(err)
+		relayErr := transport.RelayRedirect(ctx, pasted)
+		if errors.Is(relayErr, transport.ErrInvalidRedirect) {
+			// Nothing reached rclone: the authorization still waits.
+			fmt.Println(relayErr)
 			continue
 		}
-		r := <-done
-		return r.out, r.err
+		// rclone answered (a denial or stale state ends its authorization
+		// too), or its listener is gone: report how the flow ended.
+		select {
+		case r := <-done:
+			if r.err == nil && relayErr != nil {
+				r.err = relayErr
+			}
+			return r.out, r.err
+		case <-time.After(30 * time.Second):
+			return nil, fmt.Errorf("authorization did not finish: %w", cmp.Or(relayErr, errors.New("no answer from rclone")))
+		}
 	}
 }
 

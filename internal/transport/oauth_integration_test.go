@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,11 +38,17 @@ func lockOAuthPort(t *testing.T) {
 	t.Cleanup(func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); _ = f.Close() })
 }
 
-// TestOAuthRelayFlow drives rclone's non-interactive OneDrive configuration
-// against a fake OAuth provider: the daemon resolves the provider URL for
-// the user, the user "pastes" the failed localhost redirect, and the daemon
-// relays it so rclone can exchange the code for a token.
-func TestOAuthRelayFlow(t *testing.T) {
+type oauthResult struct {
+	out *fs.ConfigOut
+	err error
+}
+
+// beginOAuth starts rclone's non-interactive OneDrive configuration of
+// remote name against a fake OAuth provider and waits until rclone's
+// loopback listener runs. It returns the flow's state parameter, the
+// configuration step's result, and the code the provider received.
+func beginOAuth(t *testing.T, name string) (state string, done <-chan oauthResult, gotCode func() string) {
+	t.Helper()
 	lockOAuthPort(t)
 	if l, err := net.Listen("tcp", oauthBindAddress); err != nil {
 		t.Skipf("rclone OAuth port busy: %v", err)
@@ -49,14 +56,17 @@ func TestOAuthRelayFlow(t *testing.T) {
 		_ = l.Close()
 	}
 
-	var gotCode string
+	var mu sync.Mutex
+	var code string
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/token" {
 			http.NotFound(w, r)
 			return
 		}
 		_ = r.ParseForm()
-		gotCode = r.PostForm.Get("code")
+		mu.Lock()
+		code = r.PostForm.Get("code")
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  "fake-access",
@@ -65,12 +75,10 @@ func TestOAuthRelayFlow(t *testing.T) {
 			"expires_in":    3600,
 		})
 	}))
-	defer provider.Close()
+	t.Cleanup(provider.Close)
 
 	ctx := t.Context()
-	const name = "oauthtest"
-	defer testStorage.DeleteSection(name)
-
+	t.Cleanup(func() { testStorage.DeleteSection(name) })
 	out, err := config.CreateRemote(ctx, name, "onedrive", rc.Params{
 		"client_id":     "test-client",
 		"client_secret": "test-secret",
@@ -84,15 +92,11 @@ func TestOAuthRelayFlow(t *testing.T) {
 		t.Fatalf("first question = %+v, want config_is_local", out)
 	}
 
-	type result struct {
-		out *fs.ConfigOut
-		err error
-	}
-	done := make(chan result, 1)
+	results := make(chan oauthResult, 1)
 	go func() {
 		o, err := config.UpdateRemote(ctx, name, rc.Params{config.ConfigAuthNoBrowser: "true"},
 			config.UpdateRemoteOpt{Continue: true, State: out.State, Result: "true"})
-		done <- result{o, err}
+		results <- oauthResult{o, err}
 	}()
 
 	var authURL string
@@ -111,10 +115,21 @@ func TestOAuthRelayFlow(t *testing.T) {
 		t.Fatalf("provider URL %q does not point at the provider", authURL)
 	}
 	au, _ := url.Parse(authURL)
-	state := au.Query().Get("state")
+	state = au.Query().Get("state")
 	if state == "" || au.Query().Get("redirect_uri") != "http://localhost:53682/" {
 		t.Fatalf("unexpected provider URL parameters: %v", au.Query())
 	}
+	return state, results, func() string { mu.Lock(); defer mu.Unlock(); return code }
+}
+
+// TestOAuthRelayFlow drives rclone's non-interactive OneDrive configuration
+// against a fake OAuth provider: the daemon resolves the provider URL for
+// the user, the user "pastes" the failed localhost redirect, and the daemon
+// relays it so rclone can exchange the code for a token.
+func TestOAuthRelayFlow(t *testing.T) {
+	ctx := t.Context()
+	const name = "oauthtest"
+	state, done, gotCode := beginOAuth(t, name)
 
 	// Rejected inputs never reach rclone.
 	for _, bad := range []string{
@@ -123,8 +138,8 @@ func TestOAuthRelayFlow(t *testing.T) {
 		"http://localhost:9999/?code=x&state=" + state,
 		"not a url\x7f",
 	} {
-		if err := RelayRedirect(ctx, bad); err == nil {
-			t.Errorf("RelayRedirect(%q) accepted", bad)
+		if err := RelayRedirect(ctx, bad); !errors.Is(err, ErrInvalidRedirect) {
+			t.Errorf("RelayRedirect(%q) = %v, want ErrInvalidRedirect", bad, err)
 		}
 	}
 
@@ -147,8 +162,8 @@ func TestOAuthRelayFlow(t *testing.T) {
 		t.Fatal("config did not continue after relaying the redirect")
 	}
 
-	if gotCode != "the-code" {
-		t.Fatalf("provider received code %q", gotCode)
+	if got := gotCode(); got != "the-code" {
+		t.Fatalf("provider received code %q", got)
 	}
 	token, _ := testStorage.GetValue(name, "token")
 	if !strings.Contains(token, "fake-refresh") {
@@ -159,5 +174,33 @@ func TestOAuthRelayFlow(t *testing.T) {
 	}
 	if _, running, _ := oauthStatus(ctx); running {
 		t.Fatal("OAuth listener still running after completion")
+	}
+}
+
+// TestOAuthRelayStaleStateEndsFlow: rclone answers a redirect with the
+// wrong state with an error page and ends the authorization, so the relay
+// error must not be one that invites pasting again.
+func TestOAuthRelayStaleStateEndsFlow(t *testing.T) {
+	ctx := t.Context()
+	state, done, gotCode := beginOAuth(t, "oauthstale")
+
+	stale := "http://localhost:53682/?code=old-code&state=" + url.QueryEscape(state+"-old")
+	err := RelayRedirect(ctx, stale)
+	if err == nil || errors.Is(err, ErrInvalidRedirect) {
+		t.Fatalf("relaying a stale redirect = %v, want a terminal error", err)
+	}
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Fatalf("configuration continued after a stale redirect: %+v", r.out)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("authorization did not end after a stale redirect")
+	}
+	if err := RelayRedirect(ctx, "http://localhost:53682/?code=x&state="+url.QueryEscape(state)); !errors.Is(err, ErrOAuthNotRunning) {
+		t.Fatalf("relay after the authorization ended = %v, want ErrOAuthNotRunning", err)
+	}
+	if got := gotCode(); got != "" {
+		t.Fatalf("provider received code %q from a stale redirect", got)
 	}
 }

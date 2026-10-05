@@ -21,6 +21,11 @@ const oauthBindAddress = "127.0.0.1:53682"
 // ErrOAuthNotRunning means no OAuth flow is currently waiting for a code.
 var ErrOAuthNotRunning = errors.New("transport: no OAuth authorization in progress")
 
+// ErrInvalidRedirect means a pasted address is not a redirect to rclone's
+// listener. Nothing was relayed, so the pending authorization is unaffected
+// and the user may paste again.
+var ErrInvalidRedirect = errors.New("transport: invalid OAuth redirect")
+
 // noRedirectClient talks to rclone's loopback auth server without following
 // redirects.
 var noRedirectClient = &http.Client{
@@ -84,23 +89,25 @@ func ProviderAuthURL(ctx context.Context) (string, error) {
 // http://localhost:53682/?code=...&state=... The browser could not load it
 // because rclone's listener runs on this host, not on the user's machine.
 //
-// Only loopback redirect URLs for rclone's port are accepted; the state is
-// checked by rclone itself.
+// Only loopback redirect URLs for rclone's port are accepted (otherwise the
+// error is ErrInvalidRedirect); the state is checked by rclone itself. Any
+// answer from rclone, an error page included, ends its authorization, so
+// every other error means the authorization is over.
 func RelayRedirect(ctx context.Context, pasted string) error {
 	u, err := url.Parse(pasted)
 	if err != nil {
-		return fmt.Errorf("transport: not a URL: %w", err)
+		return fmt.Errorf("%w: not a URL: %w", ErrInvalidRedirect, err)
 	}
 	host, port, err := net.SplitHostPort(u.Host)
 	if err != nil || port != "53682" || (host != "localhost" && host != "127.0.0.1") {
-		return fmt.Errorf("transport: expected a redirect to http://localhost:53682/, got host %q", u.Host)
+		return fmt.Errorf("%w: expected http://localhost:53682/, got host %q", ErrInvalidRedirect, u.Host)
 	}
 	if u.Scheme != "http" || (u.Path != "" && u.Path != "/") {
-		return fmt.Errorf("transport: expected a redirect to http://localhost:53682/, got %s://%s%s", u.Scheme, u.Host, u.Path)
+		return fmt.Errorf("%w: expected http://localhost:53682/, got %s://%s%s", ErrInvalidRedirect, u.Scheme, u.Host, u.Path)
 	}
 	q := u.Query()
 	if q.Get("state") == "" || (q.Get("code") == "" && q.Get("error") == "") {
-		return errors.New("transport: redirect URL lacks state and code; copy the complete address from the browser")
+		return fmt.Errorf("%w: the address lacks state and code; copy the complete address from the browser", ErrInvalidRedirect)
 	}
 	if _, running, err := oauthStatus(ctx); err != nil {
 		return err
