@@ -59,10 +59,14 @@ func Entry(storeID string, b repo.ScannedBackup, now time.Time) (*store.Backup, 
 			e.DeleteAfter, e.TombstoneAt, e.TombstoneReason, e.TombstoneBy = &after, &at, t.Reason, t.By
 		}
 	}
-	// The remote meta document is unusable: the catalogue's own notes,
-	// protection and tombstone are kept (store.ReplaceCatalog) and written
-	// back to the remote.
-	e.MetaDirty = b.MetaInvalid
+	// The remote meta document is unusable, so notes, protection and
+	// tombstone are unknown: store.ReplaceCatalog keeps the catalogue's own
+	// values, and a backup the catalogue does not know yet is treated as
+	// protected, so nothing deletes it until the document is readable.
+	// Nothing is written back: the document may be a newer daemon's.
+	if b.MetaInvalid {
+		e.MetaUnknown, e.Protected = true, true
+	}
 	switch b.State {
 	case repo.StateComplete:
 		// The scan checked presence, sizes and provider hashes (level 2).

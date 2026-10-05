@@ -118,12 +118,16 @@ type Backup struct {
 	Notes          string
 	Protected      bool
 	MetaDirty      bool
-	DeleteAfter    *int64
-	UploadedAt     int64
-	ManifestJSON   string
-	VerifyLevel    int
-	VerifiedAt     *int64
-	VerifyResult   string
+	// MetaUnknown is set by the catalogue on entries whose remote meta
+	// document is unusable; it is not stored. ReplaceCatalog then keeps the
+	// existing notes, protection and tombstone.
+	MetaUnknown  bool
+	DeleteAfter  *int64
+	UploadedAt   int64
+	ManifestJSON string
+	VerifyLevel  int
+	VerifiedAt   *int64
+	VerifyResult string
 	// MetaRev counts local changes of notes, protection and tombstones.
 	MetaRev         int64
 	TombstoneAt     *int64 // when deletion was requested
@@ -337,10 +341,9 @@ func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*B
 					b.VerifyLevel, b.VerifiedAt, b.VerifyResult = p.VerifyLevel, p.VerifiedAt, p.VerifyResult
 				}
 				// Local changes not yet pushed win over the remote state, as
-				// does the local state when the remote meta is unusable
-				// (an incoming dirty entry), which is then written back.
-				if p.MetaDirty || b.MetaDirty {
-					b.Notes, b.Protected, b.MetaDirty, b.MetaRev = p.Notes, p.Protected, true, p.MetaRev
+				// does the local state when the remote meta is unusable.
+				if p.MetaDirty || b.MetaUnknown {
+					b.Notes, b.Protected, b.MetaDirty, b.MetaRev = p.Notes, p.Protected, p.MetaDirty, p.MetaRev
 					b.DeleteAfter, b.TombstoneAt, b.TombstoneReason, b.TombstoneBy = p.DeleteAfter, p.TombstoneAt, p.TombstoneReason, p.TombstoneBy
 					if p.State == "tombstoned" || b.State == "tombstoned" {
 						b.State = p.State

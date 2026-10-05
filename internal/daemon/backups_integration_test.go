@@ -5,6 +5,7 @@
 package daemon
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
 )
@@ -102,5 +104,41 @@ func TestBackupMutations(t *testing.T) {
 	waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return len(s.ReplicateFrom) == 1 })
 	if err := c.Do(ctx, http.MethodDelete, path, nil, nil); !client.IsCode(err, apiv1.CodeImmutable) {
 		t.Fatalf("delete on an immutable storage: %v", err)
+	}
+}
+
+// TestNewerMetaIsNotOverwritten: in a cluster being upgraded, a meta
+// document written by a newer daemon must not be replaced by this daemon's
+// pending change, which cannot carry over what it does not understand.
+func TestNewerMetaIsNotOverwritten(t *testing.T) {
+	ctx := t.Context()
+	r, _ := repotest.Init(t)
+	b := repotest.Backup{VMID: 100, Size: 10}
+	repotest.Write(t, r, b)
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	writeStorageCfg(t, e, localSection+offsiteSection("offsite", r.Loc.Remote, "homelab"))
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	waitStorage(t, c, "offsite", resynced)
+
+	tgt, err := r.Target(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := []byte(`{"format":"pve-rclone-backup.meta","version":2,"notes":"from a newer daemon"}`)
+	if _, err := tgt.PutBytes(ctx, b.ID().Path(layout.MetaName), newer); err != nil {
+		t.Fatal(err)
+	}
+	notes := "changed on an older node"
+	path := "/v1/storages/offsite/backups/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst"
+	if err := c.Do(ctx, http.MethodPatch, path, apiv1.BackupUpdate{Notes: &notes}, nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second) // the change is pushed right away, if at all
+	got, err := tgt.ReadAll(ctx, b.ID().Path(layout.MetaName), 1<<20)
+	if err != nil || !bytes.Equal(got, newer) {
+		t.Fatalf("newer meta document replaced: %s, %v", got, err)
 	}
 }

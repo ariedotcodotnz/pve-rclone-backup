@@ -170,7 +170,10 @@ func (d *Daemon) pushOne(ctx context.Context, b *store.Backup) error {
 		return err
 	}
 	meta, err := rp.ReadMeta(ctx, gen, id)
-	if errors.Is(err, repo.ErrInvalidDocument) {
+	// A corrupt or misplaced document is replaced, but not one written by
+	// a newer daemon (in a cluster being upgraded): this one cannot carry
+	// over what it does not understand. The change stays pending.
+	if errors.Is(err, repo.ErrInvalidDocument) && !errors.Is(err, manifest.ErrUnsupported) {
 		meta, err = manifest.NewMeta(time.Now()), nil
 	}
 	if err != nil {

@@ -222,7 +222,21 @@ func TestResyncKeepsMetadataWhenMetaIsUnusable(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("catalogue = %v, %v", got, err)
 	}
-	if e := got[0]; e.Notes != "changed later" || !e.Protected || e.State != "tombstoned" || e.DeleteAfter == nil || !e.MetaDirty {
+	if e := got[0]; e.Notes != "changed later" || !e.Protected || e.State != "tombstoned" || e.DeleteAfter == nil || e.MetaDirty {
 		t.Fatalf("entry after an unusable meta document = %+v", e)
+	}
+
+	// Without a catalogue entry to fall back on, the protection is unknown:
+	// the backup is treated as protected and nothing is written back.
+	fresh := openStore(t)
+	if _, err := catalog.Resync(ctx, fresh, "offsite", r, "homelab"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = fresh.ListBackups(ctx, "offsite", store.BackupFilter{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("catalogue = %v, %v", got, err)
+	}
+	if e := got[0]; !e.Protected || e.MetaDirty || e.State != "complete" {
+		t.Fatalf("unknown metadata not treated as protected: %+v", e)
 	}
 }
