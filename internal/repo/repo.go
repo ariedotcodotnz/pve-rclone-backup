@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"slices"
 	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
@@ -495,19 +494,13 @@ func checkParts(m *manifest.Manifest, entries []transport.Entry) []string {
 		case e.Size != seg.Size || e.StoredSize != seg.StoredSize:
 			problems = append(problems, fmt.Sprintf("segment %d has size %d/%d, expected %d/%d",
 				seg.Index, e.Size, e.StoredSize, seg.Size, seg.StoredSize))
-		case e.StoredHash != "" && len(seg.StoredHash) > 0 && !slices.Contains(mapValues(seg.StoredHash), e.StoredHash):
+		// Only a hash of the same algorithm can show a change: a repository
+		// copied to another backend lists hashes the manifest does not have.
+		case e.StoredHash != "" && seg.StoredHash[e.StoredHashType] != "" && seg.StoredHash[e.StoredHashType] != e.StoredHash:
 			problems = append(problems, fmt.Sprintf("segment %d provider hash changed", seg.Index))
 		}
 	}
 	return problems
-}
-
-func mapValues(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	return out
 }
 
 // Delete removes a backup in an order that a crash cannot turn into an

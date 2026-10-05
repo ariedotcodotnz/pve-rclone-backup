@@ -161,7 +161,10 @@ type Entry struct {
 	Dir        bool
 	Size       int64 // plaintext size (objects)
 	StoredSize int64 // stored size (objects)
-	StoredHash string
+	// StoredHash is the provider hash of the stored bytes, of algorithm
+	// StoredHashType (both empty if the backend has none).
+	StoredHash     string
+	StoredHashType string
 }
 
 // List lists dir non-recursively. A missing directory yields
@@ -184,6 +187,7 @@ func (t *Target) List(ctx context.Context, dir string) ([]Entry, error) {
 				if ent.StoredHash, err = base.Hash(ctx, t.baseHash); err != nil {
 					return nil, fmt.Errorf("transport: hash of %s: %w", e.Remote(), err)
 				}
+				ent.StoredHashType = t.baseHash.String()
 			}
 		}
 		out = append(out, ent)
