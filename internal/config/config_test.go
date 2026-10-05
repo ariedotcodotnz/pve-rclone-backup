@@ -130,7 +130,7 @@ func TestStorageFlagsAndBase(t *testing.T) {
 	p["shared"] = Raw{Value: "1"}
 	p["nodes"] = Raw{Value: "pve1,pve2"}
 	p["prune-backups"] = Raw{Value: "keep-daily=7,keep-monthly=6"}
-	p["bwlimit"] = Raw{Value: "restore=51200,default=10240"}
+	p["bwlimit"] = Raw{Value: "restore=51200,default=10240,move=0.5,clone=1e3"}
 	s, err := DecodeStorage("offsite", p)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,8 @@ func TestStorageFlagsAndBase(t *testing.T) {
 	if pb := s.Base.PruneBackups; pb == nil || pb.KeepDaily != 7 || pb.KeepMonthly != 6 || pb.IsKeepAll() {
 		t.Fatalf("prune options: %+v", s.Base.PruneBackups)
 	}
-	if !maps.Equal(s.Base.BwLimit, map[string]int64{"restore": 51200, "default": 10240}) {
+	// PVE's limits are numbers: fractions are kept, not truncated to 0.
+	if !maps.Equal(s.Base.BwLimit, map[string]float64{"restore": 51200, "default": 10240, "move": 0.5, "clone": 1000}) {
 		t.Fatalf("bwlimit: %v", s.Base.BwLimit)
 	}
 

@@ -20,7 +20,7 @@ type BaseOptions struct {
 	Shared              bool
 	PruneBackups        *PruneOptions // nil: unset (keep everything)
 	MaxProtectedBackups *int64
-	BwLimit             map[string]int64 // KiB/s per operation (clone, default, migration, move, restore)
+	BwLimit             map[string]float64 // KiB/s per operation (clone, default, migration, move, restore)
 }
 
 // PruneOptions is PVE's prune-backups property string.
@@ -74,7 +74,7 @@ func ParsePruneOptions(s string) (*PruneOptions, error) {
 	}
 	for k, v := range kv {
 		if k == "keep-all" {
-			b, err := decodeBool(Raw{Value: v})
+			b, err := parsePropertyBool(v)
 			if err != nil {
 				return nil, fmt.Errorf("keep-all: %w", err)
 			}
@@ -101,11 +101,25 @@ func ParsePruneOptions(s string) (*PruneOptions, error) {
 	return p, nil
 }
 
+// parsePropertyBool parses a boolean inside a property string like PVE's
+// parse_boolean. Unlike top-level flags (0 or 1 only), property strings
+// accept on/off, yes/no and true/false in any case.
+func parsePropertyBool(v string) (bool, error) {
+	switch strings.ToLower(v) {
+	case "1", "on", "yes", "true":
+		return true, nil
+	case "0", "off", "no", "false":
+		return false, nil
+	}
+	return false, fmt.Errorf("expected a boolean, got %q", v)
+}
+
 var contentTypes = []string{"backup", "none"}
 
 var bwlimitKeys = []string{"clone", "default", "migration", "move", "restore"}
 
-var numberRe = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
+// numberRe is PVE::JSONSchema::is_number.
+var numberRe = regexp.MustCompile(`^[+-]?(?:\d+\.\d+|\d+\.|\.\d+|\d+)(?:[eE][+-]?\d+)?$`)
 
 func decodeBaseOptions(props map[string]Raw, consumed map[string]bool) (BaseOptions, []error) {
 	var b BaseOptions
@@ -180,7 +194,9 @@ func decodeBaseOptions(props map[string]Raw, consumed map[string]bool) (BaseOpti
 	return b, errs
 }
 
-func decodeBwLimit(r Raw, errs []error) (map[string]int64, []error) {
+// decodeBwLimit parses PVE's bwlimit property string: numbers (KiB/s) with
+// a minimum of 0, fractions and exponents included.
+func decodeBwLimit(r Raw, errs []error) (map[string]float64, []error) {
 	fail := func(err error) []error { return append(errs, &PropertyError{Key: "bwlimit", Err: err}) }
 	if err := checkRaw(r); err != nil {
 		return nil, fail(err)
@@ -189,16 +205,16 @@ func decodeBwLimit(r Raw, errs []error) (map[string]int64, []error) {
 	if err != nil {
 		return nil, fail(err)
 	}
-	out := map[string]int64{}
+	out := map[string]float64{}
 	for k, v := range kv {
 		if !slices.Contains(bwlimitKeys, k) {
 			return nil, fail(fmt.Errorf("unknown bandwidth limit key %q", k))
 		}
-		if !numberRe.MatchString(v) {
+		f, err := strconv.ParseFloat(v, 64)
+		if !numberRe.MatchString(v) || err != nil && !errors.Is(err, strconv.ErrRange) || f < 0 {
 			return nil, fail(fmt.Errorf("%s: invalid limit %q", k, v))
 		}
-		f, _ := strconv.ParseFloat(v, 64)
-		out[k] = int64(f)
+		out[k] = f
 	}
 	return out, errs
 }

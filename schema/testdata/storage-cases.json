@@ -72,6 +72,26 @@
     [
       "content",
       "backup"
+    ],
+    [
+      "prune-backups",
+      "keep-all=yes"
+    ],
+    [
+      "prune-backups",
+      "keep-all=NO,keep-last=3"
+    ],
+    [
+      "prune-backups",
+      "keep-all=true"
+    ],
+    [
+      "bwlimit",
+      "restore=0.5"
+    ],
+    [
+      "bwlimit",
+      "restore=1e3,default=.5,move=+5."
     ]
   ],
   "reject": [
@@ -150,6 +170,22 @@
     [
       "prune-backups",
       "keep-bogus=1"
+    ],
+    [
+      "prune-backups",
+      "keep-all=maybe"
+    ],
+    [
+      "bwlimit",
+      "restore=-1"
+    ],
+    [
+      "bwlimit",
+      "restore=0x10"
+    ],
+    [
+      "bwlimit",
+      "restore=1_000"
     ]
   ],
   "pve_lenient": [
