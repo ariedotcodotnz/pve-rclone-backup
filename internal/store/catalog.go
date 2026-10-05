@@ -336,8 +336,10 @@ func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*B
 				if b.State != "damaged" && (p.VerifyLevel > b.VerifyLevel || p.VerifyLevel == b.VerifyLevel && !newer) {
 					b.VerifyLevel, b.VerifiedAt, b.VerifyResult = p.VerifyLevel, p.VerifiedAt, p.VerifyResult
 				}
-				// Local changes not yet pushed win over the remote state.
-				if p.MetaDirty {
+				// Local changes not yet pushed win over the remote state, as
+				// does the local state when the remote meta is unusable
+				// (an incoming dirty entry), which is then written back.
+				if p.MetaDirty || b.MetaDirty {
 					b.Notes, b.Protected, b.MetaDirty, b.MetaRev = p.Notes, p.Protected, true, p.MetaRev
 					b.DeleteAfter, b.TombstoneAt, b.TombstoneReason, b.TombstoneBy = p.DeleteAfter, p.TombstoneAt, p.TombstoneReason, p.TombstoneBy
 					if p.State == "tombstoned" || b.State == "tombstoned" {

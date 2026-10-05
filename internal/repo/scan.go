@@ -32,8 +32,11 @@ type ScannedBackup struct {
 	State      string
 	Manifest   *manifest.Manifest // nil unless the manifest could be read
 	Meta       *manifest.Meta
-	Problems   []string
-	Files      []transport.Entry
+	// MetaInvalid means a meta document exists but could not be used, so
+	// the notes, protection and tombstone are unknown.
+	MetaInvalid bool
+	Problems    []string
+	Files       []transport.Entry
 }
 
 // Scan walks every generation of a source and classifies each backup
@@ -125,8 +128,9 @@ func (r *Repo) scanBackup(ctx context.Context, t *transport.Target, gen int, id 
 		return slices.ContainsFunc(files, func(e transport.Entry) bool { return !e.Dir && e.Name == name })
 	}
 	if has(layout.MetaName) {
-		// A misplaced or unreadable meta document is ignored: only a meta
-		// document bound to this backup may mark it as being deleted.
+		// A misplaced or unreadable meta document is not used: only a meta
+		// document bound to this backup may mark it as being deleted, and
+		// its notes, protection and tombstone are unknown (MetaInvalid).
 		// Any other error says nothing about this backup: the scan fails
 		// rather than classify it from incomplete information.
 		meta, err := r.ReadMeta(ctx, gen, id)
@@ -134,6 +138,7 @@ func (r *Repo) scanBackup(ctx context.Context, t *transport.Target, gen int, id 
 		case err == nil:
 			b.Meta = meta
 		case errors.Is(err, ErrInvalidDocument):
+			b.MetaInvalid = true
 			b.Problems = append(b.Problems, "meta: "+err.Error())
 		default:
 			return b, err

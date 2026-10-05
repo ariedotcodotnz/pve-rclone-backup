@@ -59,6 +59,10 @@ func Entry(storeID string, b repo.ScannedBackup, now time.Time) (*store.Backup, 
 			e.DeleteAfter, e.TombstoneAt, e.TombstoneReason, e.TombstoneBy = &after, &at, t.Reason, t.By
 		}
 	}
+	// The remote meta document is unusable: the catalogue's own notes,
+	// protection and tombstone are kept (store.ReplaceCatalog) and written
+	// back to the remote.
+	e.MetaDirty = b.MetaInvalid
 	switch b.State {
 	case repo.StateComplete:
 		// The scan checked presence, sizes and provider hashes (level 2).
@@ -106,9 +110,9 @@ func Resync(ctx context.Context, st *store.Store, storeID string, r *repo.Repo, 
 				rep.Tombstoned++
 			default:
 				rep.Damaged++
-				for _, p := range b.Problems {
-					rep.Problems = append(rep.Problems, b.ID.String()+": "+p)
-				}
+			}
+			for _, p := range b.Problems {
+				rep.Problems = append(rep.Problems, b.ID.String()+": "+p)
 			}
 		case repo.StateIncomplete:
 			rep.Incomplete++

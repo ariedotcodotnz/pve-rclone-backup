@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,5 +178,51 @@ func TestResyncRebuildsCatalogue(t *testing.T) {
 	}
 	if g2, err := st.GetBackup(ctx, "offsite", g.Volname); err != nil || g2.VerifyLevel != 3 {
 		t.Fatalf("verification level after resync = %+v, %v", g2, err)
+	}
+}
+
+// TestResyncKeepsMetadataWhenMetaIsUnusable: a meta document that cannot be
+// read must not reset notes, protection and tombstone to their upload-time
+// values; the catalogue keeps them, reports the problem and writes them
+// back.
+func TestResyncKeepsMetadataWhenMetaIsUnusable(t *testing.T) {
+	ctx := t.Context()
+	r, _ := repotest.Init(t)
+	b := repotest.Backup{VMID: 100, Time: time.Date(2026, 10, 1, 2, 0, 1, 0, time.UTC), Size: 1 << 10, Notes: "at upload"}
+	repotest.Write(t, r, b)
+	meta, err := r.ReadMeta(ctx, 1, b.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Notes, meta.Protected = "changed later", true
+	meta.Tombstone = &manifest.Tombstone{RequestedAt: time.Now().UTC(), DeleteAfter: time.Now().Add(time.Hour).UTC(), Reason: "user", State: "pending"}
+	if err := r.WriteMeta(ctx, 1, b.ID(), meta); err != nil {
+		t.Fatal(err)
+	}
+	st := openStore(t)
+	if _, err := catalog.Resync(ctx, st, "offsite", r, "homelab"); err != nil {
+		t.Fatal(err)
+	}
+
+	tgt, err := r.Target(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tgt.PutBytes(ctx, b.ID().Path(layout.MetaName), []byte("not a meta document")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := catalog.Resync(ctx, st, "offsite", r, "homelab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Problems) != 1 || !strings.Contains(rep.Problems[0], "meta:") {
+		t.Errorf("report problems = %q", rep.Problems)
+	}
+	got, err := st.ListBackups(ctx, "offsite", store.BackupFilter{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("catalogue = %v, %v", got, err)
+	}
+	if e := got[0]; e.Notes != "changed later" || !e.Protected || e.State != "tombstoned" || e.DeleteAfter == nil || !e.MetaDirty {
+		t.Fatalf("entry after an unusable meta document = %+v", e)
 	}
 }
