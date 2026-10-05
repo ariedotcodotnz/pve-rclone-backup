@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,15 +84,11 @@ func OpenBase(ctx context.Context, l RepoLocation) (*Target, error) {
 // CryptRoot is the base-relative directory of a key generation.
 func CryptRoot(gen int) string { return fmt.Sprintf("g%d", gen) }
 
-func quoteConn(v string) string {
-	// Connection string values are quoted with single quotes; a literal
-	// single quote is written twice.
-	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
-}
-
-// OpenCrypt opens the crypt root of a key generation. The keys are passed
-// in an rclone connection string, so they are never written to
-// remotes.conf and rclone names the remote by a hash, not the keys.
+// OpenCrypt opens the crypt root of a key generation. The keys are handed
+// to the crypt backend in an in-memory configuration map, so they are never
+// written to remotes.conf. The backend is constructed directly rather than
+// with fs.NewFs, which logs the remote string it is given at debug level:
+// the keys never become part of any string rclone could log.
 func OpenCrypt(ctx context.Context, l RepoLocation, g secrets.Generation) (*Target, error) {
 	if err := l.Validate(); err != nil {
 		return nil, err
@@ -102,15 +101,27 @@ func OpenCrypt(ctx context.Context, l RepoLocation, g secrets.Generation) (*Targ
 	if err != nil {
 		return nil, err
 	}
-	conn := fmt.Sprintf(":crypt,remote=%s,password=%s,password2=%s,filename_encryption=%s,directory_name_encryption=%t,filename_encoding=%s,suffix=%s:",
-		quoteConn(l.Remote+":"+path.Join(l.Path, CryptRoot(g.ID))), quoteConn(pw), quoteConn(pw2),
-		g.FilenameEncryption, g.DirectoryNameEncryption, g.FilenameEncoding, quoteConn(g.Suffix))
-	// The connection string carries the (reversibly obscured) keys: never
-	// put it into an error or log message.
-	f, err := fs.NewFs(ctx, conn)
+	ri, err := fs.Find("crypt")
 	if err != nil {
-		return nil, fmt.Errorf("transport: open crypt root %s of %s: %s", CryptRoot(g.ID), l.Remote+":"+l.Path,
-			strings.ReplaceAll(err.Error(), conn, ":crypt:"))
+		return nil, err
+	}
+	base := l.Remote + ":" + path.Join(l.Path, CryptRoot(g.ID))
+	// Named like fs.NewFs names configured-on-the-fly remotes, after a hash
+	// of the location (not of the keys).
+	sum := sha256.Sum256([]byte(base))
+	name := ":crypt{" + base64.RawURLEncoding.EncodeToString(sum[:])[:8] + "}"
+	m := fs.ConfigMap(ri.Prefix, ri.Options, name, configmap.Simple{
+		"remote":                    base,
+		"password":                  pw,
+		"password2":                 pw2,
+		"filename_encryption":       g.FilenameEncryption,
+		"directory_name_encryption": strconv.FormatBool(g.DirectoryNameEncryption),
+		"filename_encoding":         g.FilenameEncoding,
+		"suffix":                    g.Suffix,
+	})
+	f, err := ri.NewFs(ctx, name, "", m)
+	if err != nil {
+		return nil, fmt.Errorf("transport: open crypt root %s of %s: %w", CryptRoot(g.ID), l.Remote+":"+l.Path, err)
 	}
 	t := targetFromFs(f)
 	if !t.Encrypted() {

@@ -41,6 +41,10 @@ var scrubbers = []struct {
 }{
 	// JSON fields: "access_token":"..."
 	{regexp.MustCompile(`(?i)("(?:access_token|refresh_token|id_token|token|password2?|pass|client_secret|secret)"\s*:\s*")(?:[^"\\]|\\.)*(")`), "${1}" + Mask + "${2}"},
+	// Quoted values, as in rclone connection strings: password='...' (a
+	// quote inside is doubled) or password="...", also inside a %q-quoted
+	// message where the double quotes appear as \"
+	{regexp.MustCompile(`(?i)\b(access_token|refresh_token|id_token|token|client_secret|secret|password2?|pass|passphrase)(\s*=\s*)(?:'(?:[^']|'')*'|\\"(?:[^"\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*")`), "${1}${2}" + Mask},
 	// key=value / key: value pairs
 	{regexp.MustCompile(`(?i)\b(access_token|refresh_token|id_token|client_secret|password2?|passphrase|code)(\s*[=:]\s*)[^\s&,;"']+`), "${1}${2}" + Mask},
 	// HTTP authorization

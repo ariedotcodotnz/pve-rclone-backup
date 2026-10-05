@@ -6,15 +6,21 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	onedriveapi "github.com/rclone/rclone/backend/onedrive/api"
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/lib/pacer"
 	"golang.org/x/oauth2"
@@ -179,5 +185,60 @@ func TestHiddenObjectsAreMissing(t *testing.T) {
 	ctl.Hide = func(string) bool { return true }
 	if _, err := crypted.Stat(t.Context(), "dir/a"); Classify(err) != ClassNotFound {
 		t.Fatalf("hidden object: %v", err)
+	}
+}
+
+// lockedBuffer is a goroutine-safe log sink.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestOpenCryptKeepsKeysOutOfLogs: with rclone's debug logging on and no
+// redaction, opening a crypt root logs nothing that holds the keys, plain
+// or obscured; and its errors keep their identity.
+func TestOpenCryptKeepsKeysOutOfLogs(t *testing.T) {
+	var logs lockedBuffer
+	fs.SetLogger(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	t.Cleanup(func() { fs.SetLogger(slog.NewTextHandler(io.Discard, nil)) })
+	ci := fs.GetConfig(context.Background())
+	level := ci.LogLevel
+	ci.LogLevel = fs.LogLevelDebug
+	t.Cleanup(func() { ci.LogLevel = level })
+
+	name := fmt.Sprintf("lk%d", time.Now().UnixNano())
+	testStorage.SetSection(name, map[string]string{"type": "faulty", "id": name, "remote": t.TempDir()})
+	faultfs.Register(name, &faultfs.Controller{})
+	g, err := secrets.NewGeneration(1, "base32768", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenCrypt(t.Context(), RepoLocation{Remote: name, Path: "pve-backups"}, g); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "Creating backend") {
+		t.Fatalf("rclone debug log not captured:\n%s", out)
+	}
+	if strings.Contains(out, g.Password) || strings.Contains(out, g.Password2) ||
+		regexp.MustCompile(`(?i)password2?\s*=`).MatchString(out) {
+		t.Fatalf("crypt keys in the debug log:\n%s", out)
+	}
+
+	_, err = OpenCrypt(t.Context(), RepoLocation{Remote: "missing" + name, Path: "pve-backups"}, g)
+	if !errors.Is(err, fs.ErrorNotFoundInConfigFile) {
+		t.Fatalf("OpenCrypt error lost its identity: %v", err)
 	}
 }

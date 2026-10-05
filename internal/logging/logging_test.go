@@ -5,6 +5,7 @@ package logging
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -35,6 +36,9 @@ func TestSecretsNeverReachTheLog(t *testing.T) {
 	log.Info("crypt", slog.Group("remote", "password", pass, "password2", pass, "name", "od-crypt"))
 	log.With("client_secret", secret).Info("configured")
 	log.Info("config", "remote_password", pass)
+	// rclone's fs.NewFs logs connection strings with %q at debug level.
+	log.Debug(fmt.Sprintf("Creating backend with remote %q",
+		":crypt,remote='od:pve/g1',password='"+pass+"''x',password2=\""+secret+"\",suffix='.bin':"))
 
 	out := buf.String()
 	for _, s := range []string{access, refresh, secret, pass} {
@@ -42,7 +46,7 @@ func TestSecretsNeverReachTheLog(t *testing.T) {
 			t.Errorf("secret %q leaked:\n%s", s, out)
 		}
 	}
-	for _, keep := range []string{"token refreshed", "od-crypt", "state=abc", "localhost:53682"} {
+	for _, keep := range []string{"token refreshed", "od-crypt", "state=abc", "localhost:53682", "remote='od:pve/g1'", "suffix='.bin'"} {
 		if !strings.Contains(out, keep) {
 			t.Errorf("non-secret %q was removed:\n%s", keep, out)
 		}
