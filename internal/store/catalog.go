@@ -330,9 +330,10 @@ func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*B
 				return fmt.Errorf("store: catalogue entry %s belongs to storage %s, not %s", b.Volname, b.StoreID, storeID)
 			}
 			if p, ok := prev[b.Volname]; ok && p.ArchiveSHA256 == b.ArchiveSHA256 {
-				// A deeper earlier verification still holds unless the
-				// backup is damaged now.
-				if p.VerifyLevel > b.VerifyLevel && b.State != "damaged" {
+				// A deeper earlier verification, or one as deep and not
+				// older, still holds unless the backup is damaged now.
+				newer := b.VerifiedAt != nil && (p.VerifiedAt == nil || *b.VerifiedAt >= *p.VerifiedAt)
+				if b.State != "damaged" && (p.VerifyLevel > b.VerifyLevel || p.VerifyLevel == b.VerifyLevel && !newer) {
 					b.VerifyLevel, b.VerifiedAt, b.VerifyResult = p.VerifyLevel, p.VerifiedAt, p.VerifyResult
 				}
 				// Local changes not yet pushed win over the remote state.

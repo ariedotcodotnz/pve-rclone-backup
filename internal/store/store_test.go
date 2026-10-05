@@ -709,3 +709,33 @@ func TestPathWithURICharacters(t *testing.T) {
 	}
 }
 
+// TestEqualLevelVerificationKept: an incoming entry at the same level
+// replaces the local verification only if it is newer.
+func TestEqualLevelVerificationKept(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	_ = s.PutStorage(ctx, &StorageRow{StoreID: "offsite", Remote: "od", BasePath: "p", Source: "lab", ConfigHash: "h"})
+	b := testBackup("b/1", 100, "s1")
+	at := int64(100)
+	b.VerifyLevel, b.VerifiedAt, b.VerifyResult = 2, &at, "missing part.000003"
+	_ = s.PutBackup(ctx, b)
+
+	undated := testBackup("b/1", 100, "s1")
+	undated.VerifyLevel = 2
+	if err := s.ReplaceCatalog(ctx, "offsite", []*Backup{undated}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetBackup(ctx, "offsite", "b/1"); got.VerifyResult != "missing part.000003" || got.VerifiedAt == nil || *got.VerifiedAt != 100 {
+		t.Fatalf("local result lost to an undated entry: %+v", got)
+	}
+
+	later := int64(200)
+	fresh := testBackup("b/1", 100, "s1")
+	fresh.VerifyLevel, fresh.VerifiedAt, fresh.VerifyResult = 2, &later, "ok"
+	if err := s.ReplaceCatalog(ctx, "offsite", []*Backup{fresh}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetBackup(ctx, "offsite", "b/1"); got.VerifyResult != "ok" || *got.VerifiedAt != 200 {
+		t.Fatalf("newer verification not taken: %+v", got)
+	}
+}
