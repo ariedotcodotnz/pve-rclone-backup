@@ -15,7 +15,17 @@ import (
 )
 
 func TestMutualExclusion(t *testing.T) {
-	l := &Locker{Dir: filepath.Join(t.TempDir(), "lock"), AcquireTimeout: 10 * time.Second}
+	t.Run("pmxcfs", func(t *testing.T) {
+		testMutualExclusion(t, &Locker{Dir: filepath.Join(t.TempDir(), "lock"), AcquireTimeout: 10 * time.Second})
+	})
+	// Emulated expiry must not take over locks that are held.
+	t.Run("stale-emulation", func(t *testing.T) {
+		testMutualExclusion(t, &Locker{Dir: filepath.Join(t.TempDir(), "lock"), AcquireTimeout: 10 * time.Second,
+			StaleAfter: time.Hour})
+	})
+}
+
+func testMutualExclusion(t *testing.T, l *Locker) {
 	var inside, maxInside, total atomic.Int32
 	var wg sync.WaitGroup
 	for range 8 {

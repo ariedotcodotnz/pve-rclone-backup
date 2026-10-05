@@ -85,13 +85,17 @@ func (l *Locker) Do(ctx context.Context, id string, fn func(ctx context.Context)
 			}
 			return fmt.Errorf("cfs: acquire lock %s: %w", id, err)
 		}
-		// Ask pmxcfs to drop the lock if its holder vanished.
-		_ = os.Chtimes(path, time.Unix(0, 0), time.Unix(0, 0))
 		if l.StaleAfter > 0 {
+			// Ordinary filesystem: emulate pmxcfs' expiry from the time the
+			// lock was taken. The utime(0, 0) request below would reset
+			// that time and make every held lock look stale.
 			if fi, err := os.Stat(path); err == nil && time.Since(fi.ModTime()) > l.StaleAfter {
 				_ = os.Remove(path)
 				continue
 			}
+		} else {
+			// Ask pmxcfs to drop the lock if its holder vanished.
+			_ = os.Chtimes(path, time.Unix(0, 0), time.Unix(0, 0))
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("%w %s", ErrTimeout, id)
