@@ -251,3 +251,72 @@ func TestJobEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// TestSameStateDirRefusedBeforeTouchingJobs: a second daemon on the same
+// state directory stops before it opens the database, so it cannot requeue
+// the running daemon's jobs.
+func TestSameStateDirRefusedBeforeTouchingJobs(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(e.stateDir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := st.InsertJob(ctx, &store.Job{Kind: "replicate", StoreID: "offsite", State: "queued", DedupeKey: "k", OwnerNode: "pve-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimRunnable(ctx, "replicate", []string{"queued"}, "uploading", "pve-test", 600); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	unlock, err := lockStateDir(e.stateDir) // the running daemon
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	err = Run(ctx, Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Socket: e.socket,
+		StateDir: e.stateDir, PVEDir: e.pveDir, AllowUIDs: []uint32{uint32(os.Getuid())}})
+	if err == nil || !strings.Contains(err.Error(), "another pve-rclone-backupd") {
+		t.Fatalf("second daemon on the same state directory: %v", err)
+	}
+	st, _ = store.Open(ctx, filepath.Join(e.stateDir, "state.db"))
+	defer func() { _ = st.Close() }()
+	if j, _ := st.GetJob(ctx, id); j.State != "uploading" || j.LeaseUntil == nil {
+		t.Fatalf("the refused daemon changed the running daemon's job: %+v", j)
+	}
+}
+
+// TestCancelledStartKeepsDatabase: a start-up interrupted while opening the
+// database must not move a healthy database aside.
+func TestCancelledStartKeepsDatabase(t *testing.T) {
+	e := newEnv(t)
+	path := filepath.Join(e.stateDir, "state.db")
+	st, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetMeta(t.Context(), "marker", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := Run(ctx, Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Socket: e.socket,
+		StateDir: e.stateDir, PVEDir: e.pveDir, AllowUIDs: []uint32{uint32(os.Getuid())}}); err == nil {
+		t.Fatal("cancelled start succeeded")
+	}
+	if moved, _ := filepath.Glob(path + ".corrupt-*"); len(moved) != 0 {
+		t.Fatalf("healthy database moved aside: %v", moved)
+	}
+	st, err = store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if v, _, _ := st.Meta(t.Context(), "marker"); v != "kept" {
+		t.Fatalf("database contents lost: marker %q", v)
+	}
+}
+

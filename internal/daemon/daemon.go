@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/catalog"
@@ -141,6 +143,13 @@ func Run(ctx context.Context, opts Options) error {
 		metaWake: make(chan struct{}, 1),
 		ledger:   recoverykit.NewLedger(filepath.Join(opts.PVEDir, "pve-rclone-backup", "kits.json"), opts.Locker)}
 
+	// One daemon per state directory: the store is opened, and interrupted
+	// jobs requeued, only by the daemon that owns it.
+	unlock, err := lockStateDir(opts.StateDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	st, err := d.openStore(ctx)
 	if err != nil {
 		return err
@@ -380,12 +389,37 @@ func (d *Daemon) watchdog(ctx context.Context, iv time.Duration) {
 	}
 }
 
+// lockStateDir takes an exclusive lock on the state directory, released by
+// the returned function, or fails if another daemon holds it.
+func lockStateDir(dir string) (unlock func(), err error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create state directory: %w", err)
+	}
+	path := filepath.Join(dir, "daemon.lock")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // our state directory
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another pve-rclone-backupd is running with state directory %s", dir)
+		}
+		return nil, fmt.Errorf("lock %s: %w", path, err)
+	}
+	return func() { _ = f.Close() }, nil
+}
+
 // openStore opens the state database. A corrupt database or one written by
 // a newer daemon is moved aside and recreated: the catalogue is rebuilt
 // from the remote repositories and local archives are rediscovered.
 func (d *Daemon) openStore(ctx context.Context) (*store.Store, error) {
 	path := filepath.Join(d.opts.StateDir, "state.db")
 	st, err := store.Open(ctx, path)
+	if err != nil && ctx.Err() != nil {
+		// Interrupted, which says nothing about the database.
+		return nil, fmt.Errorf("open state database: %w", err)
+	}
 	reason := ""
 	switch {
 	case errors.Is(err, store.ErrCorrupt):
