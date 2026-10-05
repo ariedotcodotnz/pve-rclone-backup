@@ -90,8 +90,16 @@ sub on_update_hook_full($class, $storeid, $scfg, $update, $delete, $sensitive) {
     return undef;
 }
 
-sub on_update_hook($class, $storeid, $scfg, %param) {
-    return $class->on_update_hook_full($storeid, $scfg, \%param, [], {});
+# Called instead of on_update_hook_full on hosts with APIVER 12 (PVE 9.0):
+# with the updated properties only, followed by the sensitive ones (none
+# are declared). The current configuration comes from storage.cfg, which
+# the caller holds locked; deletions are not passed on these hosts.
+sub on_update_hook($class, $storeid, $update, %sensitive) {
+    return $class->on_update_hook_full($storeid, _current_config($storeid), $update, [], \%sensitive);
+}
+
+sub _current_config($storeid) {
+    return PVE::Storage::storage_config(PVE::Storage::config(), $storeid);
 }
 
 sub on_delete_hook($class, $storeid, $scfg) {

@@ -144,8 +144,20 @@ like(eval { $provider->restore_get_mechanism($vol) } // $@, qr/pve-rclone-backup
 
 # Hooks validate via the daemon.
 ok(!defined($plugin->on_add_hook('offsite', $scfg)), 'on_add_hook validates');
+# APIVER 12 hosts pass only the updated properties to on_update_hook.
+{
+    no warnings 'redefine';
+    local *PVE::Storage::Custom::RcloneBackupPlugin::_current_config = sub ($storeid) {
+        return $storeid eq 'offsite' ? $scfg : die "unexpected storage $storeid\n";
+    };
+    ok(!defined($plugin->on_update_hook('offsite', { disable => 1 })), 'legacy on_update_hook validates');
+}
 
 my %by = map { ("$_->{method} $_->{path}" => $_) } @{ $d->requests };
+my ($legacy) = grep { $_->{path} eq '/v1/storages/offsite/validate' && $_->{body}->{update} } @{ $d->requests };
+is_deeply([$legacy->{body}->{config}->{'rclone-remote'}, $legacy->{body}->{update}],
+    [$scfg->{'rclone-remote'}, { disable => 1 }],
+    'legacy update validated as the current configuration plus the update');
 is($by{'GET /v1/storages/offsite/backups'}->{query}, '', 'no vmid filter when listing everything');
 my @patches = grep { $_->{method} eq 'PATCH' } @{ $d->requests };
 is_deeply([map { $_->{body} } @patches], [{ protected => JSON::false }, { notes => 'changed' }], 'PATCH bodies');
