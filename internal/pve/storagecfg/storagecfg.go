@@ -138,8 +138,8 @@ func Parse(raw []byte) (*Config, []Warning) {
 			warnings = append(warnings, Warning{lineno, fmt.Sprintf("skip section %q: invalid storage ID", id)})
 			skip = true
 		} else if cfg.Get(id) != nil {
-			warnings = append(warnings, Warning{lineno, fmt.Sprintf("skip section %q: duplicate storage ID", id)})
-			skip = true
+			// PVE's SectionConfig keeps the last definition of an ID.
+			warnings = append(warnings, Warning{lineno, fmt.Sprintf("section %q defined again: the later definition replaces the earlier one", id)})
 		}
 		sec := &Section{Type: typ, ID: id, Line: lineno, Props: map[string]config.Raw{}}
 
@@ -168,6 +168,7 @@ func Parse(raw []byte) (*Config, []Warning) {
 			sec.Props[key] = raw
 		}
 		if !skip {
+			cfg.Sections = slices.DeleteFunc(cfg.Sections, func(s *Section) bool { return s.ID == id })
 			cfg.Sections = append(cfg.Sections, sec)
 		}
 	}

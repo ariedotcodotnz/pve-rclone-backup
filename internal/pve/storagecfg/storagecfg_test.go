@@ -94,6 +94,29 @@ func TestParseEdgeCases(t *testing.T) {
 	}
 }
 
+// TestDuplicateIDLastWins: PVE's SectionConfig::parse_config assigns
+// $ids->{$id} for every section, so a repeated ID ends up with the last
+// definition.
+func TestDuplicateIDLastWins(t *testing.T) {
+	cfg, warnings := Parse([]byte("rclone-backup: offsite\n\trclone-remote first\n\trclone-immutable 1\n\n" +
+		"dir: other\n\tpath /x\n\n" +
+		"rclone-backup: offsite\n\trclone-remote second\n"))
+	var ids []string
+	for _, s := range cfg.Sections {
+		ids = append(ids, s.ID)
+	}
+	if !slices.Equal(ids, []string{"local", "other", "offsite"}) {
+		t.Fatalf("sections = %v", ids)
+	}
+	off := cfg.Get("offsite")
+	if r, _ := off.Get("rclone-remote"); r != "second" || off.Bool("rclone-immutable") {
+		t.Errorf("offsite = %+v, want the second definition only", off.Props)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %v", warnings)
+	}
+}
+
 func TestEnsureLocal(t *testing.T) {
 	cases := map[string]struct {
 		raw      string
