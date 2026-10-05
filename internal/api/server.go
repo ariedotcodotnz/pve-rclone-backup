@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -77,6 +78,15 @@ type Server struct {
 	idempotency IdempotencyStore
 	mux         *http.ServeMux
 	events      *Broker
+
+	keysMu sync.Mutex
+	keys   map[string]*keyLock // idempotency keys with a request in progress
+}
+
+// keyLock serializes requests that share an idempotency key.
+type keyLock struct {
+	sem  chan struct{}
+	refs int
 }
 
 // New returns a server with no routes registered.
@@ -87,6 +97,7 @@ func New(opts Options) *Server {
 		idempotency: opts.Idempotency,
 		mux:         http.NewServeMux(),
 		events:      NewBroker(256),
+		keys:        map[string]*keyLock{},
 	}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -261,6 +272,34 @@ func (c *captureWriter) Header() http.Header         { return c.header }
 func (c *captureWriter) Write(p []byte) (int, error) { return c.body.Write(p) }
 func (c *captureWriter) WriteHeader(code int)        { c.status = code }
 
+// lockKey waits until no other request with the same idempotency key is in
+// progress, so a retry that arrives while the original still runs gets the
+// original's response instead of running the mutation again.
+func (s *Server) lockKey(ctx context.Context, key string) (unlock func(), err error) {
+	s.keysMu.Lock()
+	k := s.keys[key]
+	if k == nil {
+		k = &keyLock{sem: make(chan struct{}, 1)}
+		s.keys[key] = k
+	}
+	k.refs++
+	s.keysMu.Unlock()
+	release := func() {
+		s.keysMu.Lock()
+		if k.refs--; k.refs == 0 {
+			delete(s.keys, key)
+		}
+		s.keysMu.Unlock()
+	}
+	select {
+	case k.sem <- struct{}{}:
+		return func() { <-k.sem; release() }, nil
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
+}
+
 func (s *Server) idempotent(h HandlerFunc) HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		key := r.Header.Get(apiv1.IdempotencyHeader)
@@ -269,6 +308,11 @@ func (s *Server) idempotent(h HandlerFunc) HandlerFunc {
 		}
 		peer, _ := PeerFromContext(r.Context())
 		scoped := fmt.Sprintf("%d %s %s %s", peer.UID, r.Method, r.URL.Path, key)
+		unlock, err := s.lockKey(r.Context(), scoped)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		if raw, ok, err := s.idempotency.IdempotentResponse(r.Context(), scoped, idempotencyTTL); err != nil {
 			return err
 		} else if ok {
@@ -284,14 +328,19 @@ func (s *Server) idempotent(h HandlerFunc) HandlerFunc {
 			return err
 		}
 		cw := &captureWriter{header: w.Header(), status: http.StatusOK}
-		err := h(cw, r)
+		err = h(cw, r)
 		if err == nil && cw.status < 300 {
 			body := cw.body.Bytes()
 			if !json.Valid(body) {
 				body = []byte("null")
 			}
 			raw, _ := json.Marshal(storedResponse{Status: cw.status, Body: body})
-			if perr := s.idempotency.PutIdempotentResponse(r.Context(), scoped, string(raw), idempotencyTTL); perr != nil {
+			// The mutation is done: record it even if the client has gone,
+			// or its retry would run the mutation again.
+			pctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+			perr := s.idempotency.PutIdempotentResponse(pctx, scoped, string(raw), idempotencyTTL)
+			cancel()
+			if perr != nil {
 				s.log.Warn("store idempotent response", "err", perr)
 			}
 		}

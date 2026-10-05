@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,12 @@ func startServer(t *testing.T, allow []uint32) (*Server, string, *atomic.Int64) 
 	s.HandleIdempotent("POST /v1/counter", func(w http.ResponseWriter, r *http.Request) error {
 		return WriteJSON(w, http.StatusCreated, map[string]int64{"n": counter.Add(1)})
 	})
+	return s, serve(t, s), counter
+}
+
+// serve runs s on a fresh socket until the test ends and returns its path.
+func serve(t *testing.T, s *Server) string {
+	t.Helper()
 	path := socketPath(t)
 	l, err := Listen(path)
 	if err != nil {
@@ -78,7 +85,7 @@ func startServer(t *testing.T, allow []uint32) (*Server, string, *atomic.Int64) 
 			t.Errorf("serve: %v", err)
 		}
 	})
-	return s, path, counter
+	return path
 }
 
 func me() []uint32 { return []uint32{uint32(os.Getuid())} }
@@ -286,5 +293,79 @@ func TestListen(t *testing.T) {
 	_ = os.WriteFile(file, nil, 0o600)
 	if _, err := Listen(file); err == nil {
 		t.Fatal("regular file replaced by socket")
+	}
+}
+
+// TestIdempotentConcurrentRetry: a retry that arrives while the original
+// request still runs waits for it and replays its response.
+func TestIdempotentConcurrentRetry(t *testing.T) {
+	s := New(Options{AllowUIDs: me(), Idempotency: &memIdempotency{m: map[string]string{}}})
+	var calls atomic.Int64
+	entered, release := make(chan struct{}, 2), make(chan struct{})
+	s.HandleIdempotent("POST /v1/slow", func(w http.ResponseWriter, r *http.Request) error {
+		n := calls.Add(1)
+		entered <- struct{}{}
+		<-release
+		return WriteJSON(w, http.StatusCreated, map[string]int64{"n": n})
+	})
+	path := serve(t, s)
+	type result struct {
+		status     int
+		head, body string
+	}
+	post := func(out chan<- result) {
+		status, head, body := raw(t, path, "POST /v1/slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"+
+			"Content-Length: 0\r\nIdempotency-Key: same\r\n\r\n")
+		out <- result{status, head, body}
+	}
+	first, second := make(chan result, 1), make(chan result, 1)
+	go post(first)
+	<-entered
+	go post(second)
+	time.Sleep(200 * time.Millisecond) // the retry is now waiting for the key
+	close(release)
+	r1, r2 := <-first, <-second
+	if calls.Load() != 1 || r1.status != 201 || r2.status != 201 || r1.body != r2.body {
+		t.Fatalf("handler ran %d times; responses %d %s / %d %s", calls.Load(), r1.status, r1.body, r2.status, r2.body)
+	}
+	if !strings.Contains(r2.head, "Idempotent-Replayed: true") {
+		t.Errorf("retry not replayed:\n%s", r2.head)
+	}
+}
+
+// ctxIdempotency fails on a cancelled context, as the SQLite store does.
+type ctxIdempotency struct{ memIdempotency }
+
+func (s *ctxIdempotency) PutIdempotentResponse(ctx context.Context, key, resp string, age int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.memIdempotency.PutIdempotentResponse(ctx, key, resp, age)
+}
+
+// TestIdempotentResponseStoredAfterDisconnect: a client that disconnects
+// once the mutation is done must not make its retry run it again.
+func TestIdempotentResponseStoredAfterDisconnect(t *testing.T) {
+	s := New(Options{Idempotency: &ctxIdempotency{memIdempotency{m: map[string]string{}}}})
+	ctx, disconnect := context.WithCancel(context.Background())
+	calls := 0
+	h := s.idempotent(func(w http.ResponseWriter, r *http.Request) error {
+		calls++
+		disconnect() // the client goes away after the mutation succeeded
+		return WriteJSON(w, http.StatusCreated, map[string]int{"n": calls})
+	})
+	req := func(ctx context.Context) *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/x", nil)
+		r.Header.Set(apiv1.IdempotencyHeader, "k")
+		w := httptest.NewRecorder()
+		if err := h(w, r); err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	req(ctx)
+	retry := req(context.Background())
+	if calls != 1 || retry.Header().Get("Idempotent-Replayed") != "true" {
+		t.Fatalf("handler ran %d times after a disconnect; retry headers %v", calls, retry.Header())
 	}
 }
