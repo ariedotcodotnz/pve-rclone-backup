@@ -125,6 +125,15 @@ func run(ctx context.Context, size, segSize int64, path, clientID, clientSecret 
 	count := max((size+segSize-1)/segSize, 1)
 	var remotes []string
 	var segs []transport.Segment
+	// Remove whatever was uploaded, also when a later step fails.
+	defer func() {
+		for _, r := range remotes {
+			if err := tgt.Remove(context.Background(), r); err != nil {
+				fmt.Println("cleanup:", err)
+			}
+		}
+		fmt.Printf("cleanup done; remove the empty folder %q (and recycle bin items) in OneDrive if desired\n", path)
+	}()
 	start := time.Now()
 	for i := range count {
 		off := i * segSize
@@ -149,15 +158,6 @@ func run(ctx context.Context, size, segSize int64, path, clientID, clientSecret 
 		return fmt.Errorf("whole-archive hash %s != %s", whole, digest)
 	}
 	fmt.Printf("uploaded %s in %s\n", fs.SizeSuffix(size), time.Since(start).Round(time.Second))
-
-	defer func() {
-		for _, r := range remotes {
-			if err := tgt.Remove(context.Background(), r); err != nil {
-				fmt.Println("cleanup:", err)
-			}
-		}
-		fmt.Printf("cleanup done; remove the empty folder %q (and recycle bin items) in OneDrive if desired\n", path)
-	}()
 
 	h := sha256.New()
 	for i, r := range remotes {
