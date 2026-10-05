@@ -8,11 +8,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func openTest(t *testing.T) *Store {
@@ -47,7 +51,7 @@ func TestOpenCreatesLatestSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if m, _ := filepath.Glob(path + ".pre-*"); len(m) != 0 {
+	if m, _ := filepath.Glob(path + ".schema-*"); len(m) != 0 {
 		t.Fatal("no-op open wrote a pre-migration copy")
 	}
 }
@@ -81,7 +85,7 @@ func TestMigrationCopiesDatabaseFirst(t *testing.T) {
 		t.Fatalf("schema_version = %s", v)
 	}
 	migrationFS = fstest.MapFS{"migrations/0001_init.sql": {Data: m1}}
-	backup, err := Open(t.Context(), path+".pre-2")
+	backup, err := Open(t.Context(), path+".schema-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,3 +580,132 @@ func TestVerificationBookkeeping(t *testing.T) {
 		t.Fatalf("verified bytes = %d, %v", n, err)
 	}
 }
+
+// TestCancelledOpenIsNotCorruption: an interrupted start-up must not be
+// mistaken for a corrupt database, which the daemon moves aside.
+func TestCancelledOpenIsNotCorruption(t *testing.T) {
+	s := openTest(t)
+	path := s.Path()
+	_ = s.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := Open(ctx, path)
+	if err == nil || errors.Is(err, ErrCorrupt) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("open with a cancelled context = %v, want context.Canceled and not ErrCorrupt", err)
+	}
+}
+
+// TestDatabaseFilesArePrivate: the database, its WAL files and migration
+// copies are 0600 whatever the umask, also for a file created by an
+// earlier version with wider permissions.
+func TestDatabaseFilesArePrivate(t *testing.T) {
+	old := unix.Umask(0o022)
+	defer unix.Umask(old)
+	orig := migrationFS
+	t.Cleanup(func() { migrationFS = orig })
+	m1, _ := embeddedMigrations.ReadFile("migrations/0001_init.sql")
+	migrationFS = fstest.MapFS{"migrations/0001_init.sql": {Data: m1}}
+
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	migrationFS = fstest.MapFS{
+		"migrations/0001_init.sql":  {Data: m1},
+		"migrations/0002_extra.sql": {Data: []byte("CREATE TABLE extra (x INTEGER);")},
+	}
+	if s, err = Open(t.Context(), path); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if err := s.SetMeta(t.Context(), "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm", path + ".schema-1"} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s has mode %v, want 0600", filepath.Base(p), fi.Mode().Perm())
+		}
+	}
+}
+
+// TestInterruptedUpgradeKeepsOriginalCopy: when an upgrade over several
+// versions fails halfway, retrying from the intermediate version keeps the
+// copy of the original database.
+func TestInterruptedUpgradeKeepsOriginalCopy(t *testing.T) {
+	orig := migrationFS
+	t.Cleanup(func() { migrationFS = orig })
+	m1, _ := embeddedMigrations.ReadFile("migrations/0001_init.sql")
+	migrationFS = fstest.MapFS{"migrations/0001_init.sql": {Data: m1}}
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMeta(t.Context(), "marker", "original"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+
+	upgrade := fstest.MapFS{
+		"migrations/0001_init.sql":   {Data: m1},
+		"migrations/0002_two.sql":    {Data: []byte("CREATE TABLE two (x INTEGER);")},
+		"migrations/0003_broken.sql": {Data: []byte("this is not SQL;")},
+	}
+	migrationFS = upgrade
+	if _, err := Open(t.Context(), path); err == nil {
+		t.Fatal("broken migration applied")
+	}
+	upgrade["migrations/0003_broken.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE three (x INTEGER);")}
+	if s, err = Open(t.Context(), path); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+
+	migrationFS = fstest.MapFS{"migrations/0001_init.sql": {Data: m1}}
+	first, err := Open(t.Context(), path+".schema-1")
+	if err != nil {
+		t.Fatalf("copy of the original database: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+	if v, _, _ := first.Meta(t.Context(), "schema_version"); v != "1" {
+		t.Errorf("original copy has schema version %s", v)
+	}
+	if v, _, _ := first.Meta(t.Context(), "marker"); v != "original" {
+		t.Errorf("original copy lost its data: %q", v)
+	}
+	if _, err := os.Stat(path + ".schema-2"); err != nil {
+		t.Errorf("copy before the retry: %v", err)
+	}
+}
+
+// TestPathWithURICharacters: a path is a file name, not a URI.
+func TestPathWithURICharacters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state?x=1#frag%41.db")
+	s, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMeta(t.Context(), "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	entries, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if !slices.Contains(names, "state?x=1#frag%41.db") || slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(n, "state") && !strings.HasPrefix(n, "state?x=1#frag%41.db") }) {
+		t.Fatalf("files = %q", names)
+	}
+}
+

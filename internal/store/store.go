@@ -21,7 +21,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // database/sql driver "sqlite"
+	"modernc.org/sqlite" // database/sql driver "sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 //go:embed migrations/*.sql
@@ -88,16 +89,20 @@ func LatestSchemaVersion() int {
 
 // Open opens (creating if needed) the database at path and migrates it to
 // the latest schema. Before migrating an existing database a consistent
-// copy is written next to it as <path>.pre-<version>.
+// copy is written next to it as <path>.schema-<version it had>.
 //
-// It returns ErrCorrupt when SQLite's integrity check fails and
-// ErrNewerSchema when the schema is newer than supported; the caller decides
-// whether to rebuild (see MoveAside).
+// It returns ErrCorrupt only when SQLite reports the file as corrupt or not
+// a database, and ErrNewerSchema when the schema is newer than supported;
+// the caller decides whether to rebuild (see MoveAside). Other errors, a
+// cancelled context included, say nothing about the file.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("store: create directory: %w", err)
 	}
-	dsn := "file:" + path +
+	if err := privateFiles(path); err != nil {
+		return nil, err
+	}
+	dsn := "file:" + uriPathEscaper.Replace(path) +
 		"?_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
 		"&_pragma=synchronous(FULL)" +
@@ -114,15 +119,44 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("store: chmod: %w", err)
-	}
 	if err := s.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// uriPathEscaper escapes a file name for the "file:" URI SQLite is given,
+// in which "?", "#" and "%" would otherwise start the query, start a
+// fragment or be decoded.
+var uriPathEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
+
+// privateFiles makes the database and its WAL files private before SQLite
+// opens them: SQLite creates the WAL and shared-memory files with the
+// database file's permissions, whatever the process umask.
+func privateFiles(path string) error {
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o600) //nolint:gosec // our state file
+	if err != nil {
+		return fmt.Errorf("store: create %s: %w", path, err)
+	}
+	_ = f.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("store: chmod: %w", err)
+		}
+	}
+	return nil
+}
+
+// isCorruption reports whether SQLite found the file corrupt or not a
+// database at all.
+func isCorruption(err error) bool {
+	var se *sqlite.Error
+	if !errors.As(err, &se) {
+		return false
+	}
+	code := se.Code() & 0xff // primary result code
+	return code == sqlite3.SQLITE_CORRUPT || code == sqlite3.SQLITE_NOTADB
 }
 
 // Close closes the database.
@@ -134,7 +168,10 @@ func (s *Store) Path() string { return s.path }
 func (s *Store) checkIntegrity(ctx context.Context) error {
 	var res string
 	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&res); err != nil {
-		return fmt.Errorf("%w: %w", ErrCorrupt, err)
+		if isCorruption(err) {
+			return fmt.Errorf("%w: %w", ErrCorrupt, err)
+		}
+		return fmt.Errorf("store: integrity check: %w", err)
 	}
 	if res != "ok" {
 		return fmt.Errorf("%w: %s", ErrCorrupt, res)
@@ -176,8 +213,17 @@ func (s *Store) migrate(ctx context.Context) error {
 		return nil
 	}
 	if current > 0 {
-		backup := fmt.Sprintf("%s.pre-%d", s.path, len(all))
+		// Named after the version it holds: when an upgrade over several
+		// versions stops halfway, the next attempt starts from a newer
+		// version and must not replace the copy of the original one.
+		backup := fmt.Sprintf("%s.schema-%d", s.path, current)
 		_ = os.Remove(backup)
+		// VACUUM INTO fills an existing empty file and keeps its mode.
+		f, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // next to our state file
+		if err != nil {
+			return fmt.Errorf("store: copy database before migration: %w", err)
+		}
+		_ = f.Close()
 		if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", backup); err != nil {
 			return fmt.Errorf("store: copy database before migration: %w", err)
 		}
