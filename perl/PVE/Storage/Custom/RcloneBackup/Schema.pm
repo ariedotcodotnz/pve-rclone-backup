@@ -10,6 +10,28 @@ package PVE::Storage::Custom::RcloneBackup::Schema;
 
 use v5.36;
 
+use PVE::JSONSchema;
+
+# Bytes of a size like 512M (binary units), or undef if it is invalid or
+# above 2^62, as the daemon parses it.
+sub size_bytes($value) {
+    my ($n, $unit) = ($value // '') =~ m/^(\d+)([KMGT]?)$/ or return undef;
+    my $bytes = $n * 2**{ '' => 0, K => 10, M => 20, G => 30, T => 40 }->{$unit};
+    return $bytes <= 2**62 ? $bytes : undef;
+}
+
+sub _register_size_format($name, $minimum) {
+    return if PVE::JSONSchema::get_format($name);
+    PVE::JSONSchema::register_format($name, sub ($value, $noerr = undef) {
+        my $bytes = size_bytes($value);
+        return $value if defined($bytes) && $bytes >= $minimum;
+        return undef if $noerr;
+        die "size must be at least $minimum bytes\n";
+    });
+}
+
+_register_size_format('rclone-backup-segment-size', 67108864);
+
 my $properties = {
     'rclone-backfill' => {
         title => 'Backfill',
@@ -110,6 +132,7 @@ my $properties = {
         description => 'Size of the segments archives are split into.',
         type => 'string',
         pattern => '(?:\\d+[KMGT]?)',
+        format => 'rclone-backup-segment-size',
         default => '1G',
     },
     'rclone-source' => {

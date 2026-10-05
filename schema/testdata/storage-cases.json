@@ -92,6 +92,18 @@
     [
       "bwlimit",
       "restore=1e3,default=.5,move=+5."
+    ],
+    [
+      "rclone-segment-size",
+      "64M"
+    ],
+    [
+      "rclone-segment-size",
+      "67108864"
+    ],
+    [
+      "rclone-segment-size",
+      "2G"
     ]
   ],
   "reject": [
@@ -186,6 +198,18 @@
     [
       "bwlimit",
       "restore=1_000"
+    ],
+    [
+      "rclone-segment-size",
+      "1M"
+    ],
+    [
+      "rclone-segment-size",
+      "67108863"
+    ],
+    [
+      "rclone-segment-size",
+      "99999999999T"
     ]
   ],
   "pve_lenient": [
