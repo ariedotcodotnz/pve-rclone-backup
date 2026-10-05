@@ -264,3 +264,43 @@ func TestMergeKeys(t *testing.T) {
 		t.Fatalf("merge into nothing: %v %v", changed, err)
 	}
 }
+
+// TestRemoteStoreSeesOtherNodesChanges: a token another node refreshed is
+// read from the file, without losing this node's unsaved changes.
+func TestRemoteStoreSeesOtherNodesChanges(t *testing.T) {
+	dir, lock := testDir(t)
+	path := RemotesPath(dir)
+	seed := NewRemoteStore(path, lock, quiet())
+	_ = seed.Load()
+	seed.SetValue("od", "type", "onedrive")
+	seed.SetValue("od", "token", "t1")
+	if err := seed.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Unix(1790000000, 0)
+	here := NewRemoteStore(path, lock, quiet())
+	here.now = func() time.Time { return now }
+	if err := here.Load(); err != nil {
+		t.Fatal(err)
+	}
+	here.SetValue("od", "drive_id", "local-change") // not saved yet
+
+	other := NewRemoteStore(path, lock, quiet())
+	_ = other.Load()
+	other.SetValue("od", "token", "t2-from-another-node")
+	if err := other.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if v, _ := here.GetValue("od", "token"); v != "t1" {
+		t.Fatalf("file rechecked before the interval: token %q", v) // within recheckInterval
+	}
+	now = now.Add(2 * recheckInterval)
+	if v, _ := here.GetValue("od", "token"); v != "t2-from-another-node" {
+		t.Fatalf("token refreshed by another node not seen: %q", v)
+	}
+	if v, _ := here.GetValue("od", "drive_id"); v != "local-change" || here.Pending() != 1 {
+		t.Fatalf("pending local change lost: %q, %d pending", v, here.Pending())
+	}
+}

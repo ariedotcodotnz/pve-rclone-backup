@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/rclone/rclone/fs/config"
 )
@@ -44,11 +45,13 @@ type change struct {
 // setup), so changes are recorded and merged into the current file under
 // the cluster lock on Save instead of overwriting it with a stale view.
 // Changes that cannot be persisted (no quorum) stay pending and are
-// retried by the next Save.
+// retried by the next Save. Reads pick up changes other nodes made to the
+// file, as rclone's own config storage does.
 type RemoteStore struct {
 	path string
 	lock Locker
 	log  *slog.Logger
+	now  func() time.Time
 
 	flushMu sync.Mutex // serializes Flush
 	mu      sync.Mutex
@@ -56,7 +59,12 @@ type RemoteStore struct {
 	data    sections // base plus pending changes
 	pending []change
 	loaded  bool
+	read    os.FileInfo // the file as base was read from it
+	checked time.Time   // when the file was last checked for changes
 }
+
+// recheckInterval limits how often reads stat the file (a pmxcfs call).
+const recheckInterval = time.Second
 
 var _ config.Storage = (*RemoteStore)(nil)
 
@@ -65,7 +73,28 @@ func NewRemoteStore(path string, lock Locker, log *slog.Logger) *RemoteStore {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &RemoteStore{path: path, lock: lock, log: log, base: sections{}, data: sections{}}
+	return &RemoteStore{path: path, lock: lock, log: log, now: time.Now, base: sections{}, data: sections{}}
+}
+
+// refreshLocked rereads the file if another process replaced or changed it
+// since it was last read; pending local changes are applied on top.
+func (s *RemoteStore) refreshLocked() {
+	if !s.loaded || s.now().Sub(s.checked) < recheckInterval {
+		return
+	}
+	s.checked = s.now()
+	fi, err := os.Stat(s.path)
+	if err != nil || s.read != nil && os.SameFile(fi, s.read) && fi.ModTime().Equal(s.read.ModTime()) && fi.Size() == s.read.Size() {
+		return
+	}
+	base, err := s.readFile()
+	if err != nil {
+		s.log.Error("cannot reread remotes file; keeping the previous configuration", "path", s.path, "err", err)
+		return
+	}
+	s.base, s.read = base, fi
+	s.data = base.clone()
+	apply(s.data, s.pending)
 }
 
 // Path returns the file backing the store.
@@ -95,12 +124,14 @@ func (s *RemoteStore) record(c change) {
 func (s *RemoteStore) GetSectionList() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	return slices.Sorted(maps.Keys(s.data))
 }
 
 func (s *RemoteStore) HasSection(section string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	_, ok := s.data[section]
 	return ok
 }
@@ -116,12 +147,14 @@ func (s *RemoteStore) DeleteSection(section string) {
 func (s *RemoteStore) GetKeyList(section string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	return slices.Sorted(maps.Keys(s.data[section]))
 }
 
 func (s *RemoteStore) GetValue(section, key string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	v, ok := s.data[section][key]
 	return v, ok
 }
@@ -161,6 +194,7 @@ func (s *RemoteStore) readFile() (sections, error) {
 func (s *RemoteStore) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	fi, _ := os.Stat(s.path) // before reading: a change in between is reread later
 	base, err := s.readFile()
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -174,7 +208,7 @@ func (s *RemoteStore) Load() error {
 		return nil
 	}
 	s.loaded = true
-	s.base = base
+	s.base, s.read, s.checked = base, fi, s.now()
 	s.data = base.clone()
 	apply(s.data, s.pending)
 	return nil
@@ -198,6 +232,7 @@ func (s *RemoteStore) Flush(ctx context.Context) error {
 	s.mu.Unlock()
 
 	var merged sections
+	var written os.FileInfo
 	err := s.lock.Do(ctx, remotesLockID, func(context.Context) error {
 		cur, err := s.readFile()
 		switch {
@@ -211,6 +246,7 @@ func (s *RemoteStore) Flush(ctx context.Context) error {
 			return err
 		}
 		merged = cur
+		written, _ = os.Stat(s.path)
 		return nil
 	})
 	if err != nil {
@@ -221,7 +257,7 @@ func (s *RemoteStore) Flush(ctx context.Context) error {
 	defer s.mu.Unlock()
 	// Changes recorded while we were writing remain pending.
 	s.pending = s.pending[len(pending):]
-	s.base = merged
+	s.base, s.read = merged, written
 	s.data = merged.clone()
 	apply(s.data, s.pending)
 	return nil
