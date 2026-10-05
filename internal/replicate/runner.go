@@ -369,6 +369,13 @@ func (u *upload) planSegments(ctx context.Context) error {
 		return err
 	}
 	n := segmentCount(u.src.size, u.segLen)
+	if n > manifest.MaxSegments {
+		// Refused before uploading for hours: its manifest could not be
+		// committed.
+		needMiB := (u.src.size/manifest.MaxSegments + 1<<20 - 1) >> 20
+		return jobs.Permanent(fmt.Errorf("the archive needs %d segments of %d bytes, more than %d; set rclone-segment-size to at least %dM",
+			n, u.segLen, manifest.MaxSegments, needMiB+1))
+	}
 	u.segs = make([]store.Segment, n)
 	for i := range n {
 		off := int64(i) * u.segLen

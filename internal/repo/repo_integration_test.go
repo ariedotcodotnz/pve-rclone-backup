@@ -577,3 +577,24 @@ func TestScanIsolatesCorruptDocuments(t *testing.T) {
 		t.Errorf("intact backup: %+v", b)
 	}
 }
+
+// TestCommitRefusesOversizedManifest: a manifest that readers would refuse
+// is not published.
+func TestCommitRefusesOversizedManifest(t *testing.T) {
+	r, _ := repotest.Init(t)
+	b := repotest.Backup{VMID: 100, Size: 1 << 10}
+	m := repotest.Upload(t, r, b)
+	m.Guest.Config = strings.Repeat("x", manifest.MaxManifestSize)
+	if err := r.Commit(t.Context(), m, nil); err == nil || !strings.Contains(err.Error(), "readers accept") {
+		t.Fatalf("commit of an oversized manifest: %v", err)
+	}
+	scanned, err := r.Scan(t.Context(), "homelab")
+	if err != nil || len(scanned) != 1 || scanned[0].State != repo.StateIncomplete {
+		t.Fatalf("after the refused commit: %+v, %v", scanned, err)
+	}
+	for _, f := range scanned[0].Files {
+		if f.Name == layout.MetaName || f.Name == layout.ManifestName {
+			t.Errorf("refused commit wrote %s", f.Name)
+		}
+	}
+}

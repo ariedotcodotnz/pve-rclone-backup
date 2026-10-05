@@ -462,14 +462,20 @@ func (r *Repo) Commit(ctx context.Context, m *manifest.Manifest, meta *manifest.
 	if problems := checkParts(m, entries); len(problems) > 0 {
 		return fmt.Errorf("%w: commit %s: %s", transport.ErrIntegrity, id, problems[0])
 	}
+	data, err := manifest.Encode(m)
+	if err != nil {
+		return err
+	}
+	// Readers refuse larger manifests: committing one would publish a
+	// backup that no scan or restore accepts.
+	if len(data) > manifest.MaxManifestSize {
+		return fmt.Errorf("repo: commit %s: the manifest would be %d bytes, more than the %d readers accept",
+			id, len(data), manifest.MaxManifestSize)
+	}
 	if meta == nil {
 		meta = r.newMeta(m.Generation, id)
 	}
 	if err := r.WriteMeta(ctx, m.Generation, id, meta); err != nil {
-		return err
-	}
-	data, err := manifest.Encode(m)
-	if err != nil {
 		return err
 	}
 	if _, err := t.PutBytes(ctx, id.Path(layout.ManifestName), data); err != nil {

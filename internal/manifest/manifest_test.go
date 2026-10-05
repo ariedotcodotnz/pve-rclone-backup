@@ -177,3 +177,39 @@ func TestMetaOwner(t *testing.T) {
 		}
 	}
 }
+
+// TestMaxSegmentsFitInAManifest: a manifest with the most segments and the
+// largest guest configuration is still accepted by readers.
+func TestMaxSegmentsFitInAManifest(t *testing.T) {
+	m := validManifest()
+	segLen := int64(64 << 20)
+	m.Segments = Segments{Size: segLen, Count: MaxSegments, Naming: "part.%06d"}
+	for i := range MaxSegments {
+		m.Segments.List = append(m.Segments.List, SegmentInfo{Index: i, Size: segLen, SHA256: strings.Repeat("ab", 32),
+			StoredSize: 67125280, StoredHash: map[string]string{"quickxor": strings.Repeat("A", 28)}})
+	}
+	m.Archive.Size = segLen * MaxSegments
+	cfg := strings.Repeat("x", 1<<20)
+	m.Guest.Config, m.Guest.Firewall = cfg, &cfg
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := Encode(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > MaxManifestSize {
+		t.Fatalf("a manifest with %d segments is %d bytes, more than %d", MaxSegments, len(data), MaxManifestSize)
+	}
+	if _, err := DecodeManifest(data); err != nil {
+		t.Fatal(err)
+	}
+
+	m.Segments.List = append(m.Segments.List, m.Segments.List[0])
+	m.Segments.List[MaxSegments].Index = MaxSegments
+	m.Segments.Count++
+	m.Archive.Size += segLen
+	if err := m.Validate(); err == nil {
+		t.Fatalf("%d segments accepted", m.Segments.Count)
+	}
+}
