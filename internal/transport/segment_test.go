@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -133,5 +134,22 @@ func TestCryptStoredSizeMatchesRclone(t *testing.T) {
 		if got, want := CryptStoredSize(n), c.EncryptedSize(n); got != want {
 			t.Errorf("CryptStoredSize(%d) = %d, rclone says %d", n, got, want)
 		}
+	}
+}
+
+func TestHashFullyRejectsShortSource(t *testing.T) {
+	data := randomBytes(t, 1000)
+	// The source was truncated after the upload: it ends 200 bytes short.
+	o := &segmentObject{seg: Segment{Source: bytes.NewReader(data[:900]), Offset: 400, Size: 600}, wholeBase: NewWholeHashState()}
+	if a, err := o.hashFully(); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("hashFully of a truncated source = %v, %v; want io.ErrUnexpectedEOF", a, err)
+	}
+	o.seg.Source = bytes.NewReader(data)
+	a, err := o.hashFully()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := sha256.Sum256(data[400:]); !bytes.Equal(a.seg.Sum(nil), want[:]) {
+		t.Error("hash of the complete segment is wrong")
 	}
 }

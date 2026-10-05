@@ -183,15 +183,20 @@ func (o *segmentObject) lastCompleteAttempt() *attempt {
 
 // hashFully reads the whole segment once more and returns a completed
 // attempt. It is the fallback when the upload did not consume the source
-// as a single full sequential read.
+// as a single full sequential read. A source that ends early (truncated
+// since the upload) is an error, not the hash of a shorter segment.
 func (o *segmentObject) hashFully() (*attempt, error) {
 	a, err := o.newAttempt()
 	if err != nil {
 		return nil, err
 	}
 	r := &hashingReader{r: io.NewSectionReader(o.seg.Source, o.seg.Offset, o.seg.Size), a: a}
-	if _, err := io.Copy(io.Discard, r); err != nil {
+	n, err := io.Copy(io.Discard, r)
+	if err != nil {
 		return nil, fmt.Errorf("transport: re-read segment for hashing: %w", err)
+	}
+	if n != o.seg.Size {
+		return nil, fmt.Errorf("transport: re-read segment for hashing: read %d of %d bytes: %w", n, o.seg.Size, io.ErrUnexpectedEOF)
 	}
 	return a, nil
 }
