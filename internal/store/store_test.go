@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -699,13 +698,15 @@ func TestPathWithURICharacters(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
+	// Only the database and its WAL files, all under the exact name.
 	entries, _ := os.ReadDir(dir)
-	var names []string
 	for _, e := range entries {
-		names = append(names, e.Name())
+		if !strings.HasPrefix(e.Name(), "state?x=1#frag%41.db") {
+			t.Errorf("unexpected file %q", e.Name())
+		}
 	}
-	if !slices.Contains(names, "state?x=1#frag%41.db") || slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(n, "state") && !strings.HasPrefix(n, "state?x=1#frag%41.db") }) {
-		t.Fatalf("files = %q", names)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
 	}
 }
 
