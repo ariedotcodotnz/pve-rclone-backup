@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"regexp"
 	"strings"
 	"syscall"
@@ -42,8 +43,12 @@ var (
 	quotaCodes = []string{"quotaLimitReached", "insufficientStorage", "QuotaExceeded"}
 	authCodes  = []string{"InvalidAuthenticationToken", "unauthenticated", "accessDenied"}
 	throttle   = []string{"activityLimitReached", "TooManyRequests", "throttledRequest", "serviceNotAvailable"}
-	authTexts  = []string{"invalid_grant", "AADSTS70000", "AADSTS700082", "AADSTS50173", "token has expired",
-		"couldn't fetch token", "expired_token", "re-authenticate", "config reconnect"}
+	// rclone's token source flattens a rejected refresh (HTTP 400/401) into
+	// text such as "invalid_grant: maybe token expired? - try refreshing with
+	// "rclone config reconnect ..."". Its "couldn't fetch token" prefix also
+	// wraps network failures and server errors, so it says nothing by itself.
+	authTexts = []string{"invalid_grant", "invalid_client", "unauthorized_client", "AADSTS70000", "AADSTS700082",
+		"AADSTS50173", "token has expired", "expired_token", "re-authenticate", "config reconnect"}
 )
 
 // http429Re matches an HTTP 429 status in an error message, but not a 429
@@ -76,6 +81,15 @@ func Classify(err error) Class {
 	if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
 		if re.ErrorCode == "invalid_grant" || re.ErrorCode == "invalid_client" || re.ErrorCode == "unauthorized_client" {
 			return ClassAuth
+		}
+		// The token endpoint is unavailable rather than refusing us.
+		if re.Response != nil {
+			switch code := re.Response.StatusCode; {
+			case code == http.StatusTooManyRequests:
+				return ClassThrottled
+			case code >= 500:
+				return ClassTransient
+			}
 		}
 	}
 	if ae, ok := errors.AsType[*onedriveapi.Error](err); ok {

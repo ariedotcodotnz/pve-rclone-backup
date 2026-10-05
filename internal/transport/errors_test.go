@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"syscall"
 	"testing"
@@ -43,6 +46,13 @@ func TestClassify(t *testing.T) {
 		{odErr("activityLimitReached", ""), ClassThrottled},
 		{odErr("invalidRequest", "pathIsTooLong"), ClassConfig},
 		{fmt.Errorf("couldn't fetch token: %w", &oauth2.RetrieveError{ErrorCode: "invalid_grant"}), ClassAuth},
+		// As rclone's token source reports a refused refresh, and a failed one.
+		{fmt.Errorf("couldn't fetch token: %w", errors.New(`invalid_grant: maybe token expired? - try refreshing with "rclone config reconnect od:"`)), ClassAuth},
+		{fmt.Errorf("couldn't fetch token: %w", errors.New("invalid_client: if you're using your own client id/secret, make sure they're properly set up following the docs")), ClassAuth},
+		{fmt.Errorf("couldn't fetch token: %w", &url.Error{Op: "Post", URL: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+			Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}), ClassTransient},
+		{fmt.Errorf("couldn't fetch token: %w", &oauth2.RetrieveError{Response: &http.Response{StatusCode: http.StatusServiceUnavailable}}), ClassTransient},
+		{fmt.Errorf("couldn't fetch token: %w", &oauth2.RetrieveError{Response: &http.Response{StatusCode: http.StatusTooManyRequests}}), ClassThrottled},
 		{errors.New("failed to refresh token: AADSTS70000: The provided grant has expired"), ClassAuth},
 		{pacer.RetryAfterError(errors.New("too many requests"), time.Second), ClassThrottled},
 		{fserrors.RetryErrorf("connection reset"), ClassTransient},
