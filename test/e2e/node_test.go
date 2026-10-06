@@ -48,7 +48,7 @@ func newNode(t *testing.T) *node {
 }
 
 func (n *node) sshArgs() []string {
-	return []string{"-i", n.key, "-p", n.port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+	return []string{"-i", n.key, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-p", n.port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "root@" + n.host}
 }
 
@@ -90,7 +90,7 @@ func (n *node) must(t testing.TB, format string, args ...any) string {
 // put copies a local file to the node.
 func (n *node) put(t testing.TB, local, remote string) {
 	t.Helper()
-	args := []string{"-q", "-i", n.key, "-P", n.port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+	args := []string{"-q", "-i", n.key, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-P", n.port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR", "-o", "BatchMode=yes", local, "root@" + n.host + ":" + remote}
 	if out, err := exec.Command("scp", args...).CombinedOutput(); err != nil { //nolint:gosec // copies to the test VM
 		t.Fatalf("scp %s: %v\n%s", local, err, out)

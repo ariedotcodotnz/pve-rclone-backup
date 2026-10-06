@@ -68,12 +68,14 @@ screenshot() {
 }
 
 ssh_vm() {
-    ssh -i "$dir/id_ed25519" -p "$ssh_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    ssh -i "$dir/id_ed25519" -o IdentitiesOnly=yes -o IdentityAgent=none -p "$ssh_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes root@127.0.0.1 "$@"
 }
 
+# The VM's own key only: an SSH agent in the caller's session (which may
+# not answer at all) is never asked.
 ssh_probe() {
-    timeout 20 ssh -i "$dir/id_ed25519" -p "$ssh_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    timeout 20 ssh -i "$dir/id_ed25519" -o IdentitiesOnly=yes -o IdentityAgent=none -p "$ssh_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes root@127.0.0.1 true 2>/dev/null
 }
 
