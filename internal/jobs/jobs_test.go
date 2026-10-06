@@ -482,3 +482,59 @@ func TestRetryDuringCleanup(t *testing.T) {
 	}
 	h.waitState(id, StateCancelled)
 }
+
+// TestRoundRobinIsFair: with more busy storages than workers, every
+// storage gets its turn, also when both workers become free at once.
+func TestRoundRobinIsFair(t *testing.T) {
+	h := newHarness(t, 2, target("a", "r1", 1), target("b", "r2", 1), target("c", "r3", 1))
+	release := make(chan struct{})
+	h.setScript(func(ctx context.Context, task *Task) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return complete(ctx, task)
+	})
+	storeOf := map[int64]string{}
+	for day := 1; day <= 4; day++ {
+		for _, s := range []string{"a", "b", "c"} {
+			storeOf[h.add(s, day)] = s
+		}
+	}
+	// The scheduler publishes each job as it starts it, in order.
+	starts := func() []string {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		var out []string
+		for _, u := range h.updates {
+			if u.State == StatePreparing {
+				out = append(out, storeOf[u.ID])
+			}
+		}
+		return out
+	}
+	waitStarts := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); len(starts()) < n; time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d jobs started, want %d", len(starts()), n)
+			}
+		}
+	}
+	h.start()
+	waitStarts(2)
+	for _, n := range []int{4, 6} {
+		release <- struct{}{}
+		release <- struct{}{}
+		waitStarts(n)
+	}
+	count := map[string]int{}
+	for _, s := range starts()[:6] {
+		count[s]++
+	}
+	if count["a"] != 2 || count["b"] != 2 || count["c"] != 2 {
+		t.Fatalf("first six starts %v: %v", starts()[:6], count)
+	}
+	close(release)
+}

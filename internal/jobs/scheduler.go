@@ -87,7 +87,7 @@ type Scheduler struct {
 	mu      sync.Mutex
 	running map[int64]*runningJob
 	paused  map[string]Pause // by remote
-	rr      int
+	served  string           // storage of the job started last (round-robin)
 }
 
 type runningJob struct {
@@ -198,8 +198,19 @@ func (s *Scheduler) eligibleStorages() []string {
 	for _, r := range s.running {
 		perStorage[r.storeID]++
 	}
+	// Round-robin over the configured storages, starting after the one
+	// served last. Rotating the filtered list instead would let storages
+	// that come and go with free capacity shift the turn and starve others.
+	first := 0
+	for i, t := range targets {
+		if t.ID == s.served {
+			first = i + 1
+			break
+		}
+	}
 	var ids []string
-	for _, t := range targets {
+	for k := range targets {
+		t := targets[(first+k)%len(targets)]
 		if p, ok := s.paused[t.Remote]; ok && now.Before(p.Until) {
 			continue
 		}
@@ -210,11 +221,7 @@ func (s *Scheduler) eligibleStorages() []string {
 			ids = append(ids, t.ID)
 		}
 	}
-	if len(ids) == 0 {
-		return nil
-	}
-	s.rr = (s.rr + 1) % len(ids)
-	return append(ids[s.rr:], ids[:s.rr]...)
+	return ids
 }
 
 func (s *Scheduler) remoteOf(storeID string) string {
@@ -231,6 +238,7 @@ func (s *Scheduler) start(ctx context.Context, job *store.Job) {
 	attempt := &runningJob{storeID: job.StoreID, cancel: cancel}
 	s.mu.Lock()
 	s.running[job.ID] = attempt
+	s.served = job.StoreID
 	s.mu.Unlock()
 	s.publish(job)
 	s.wg.Go(func() {
