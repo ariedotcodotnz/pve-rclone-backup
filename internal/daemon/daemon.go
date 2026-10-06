@@ -82,24 +82,27 @@ type KeyStore interface {
 
 // Daemon is a running pve-rclone-backupd instance.
 type Daemon struct {
-	log        *slog.Logger
-	opts       Options
-	store      *store.Store
-	api        *api.Server
-	storages   *storages.Manager
-	discovery  *discovery.Discoverer
-	scheduler  *jobs.Scheduler
-	fetches    *jobs.Scheduler
-	restores   *jobs.Scheduler
-	verifies   *jobs.Scheduler
-	deletes    *jobs.Scheduler
-	remotes    *remotes.Manager
-	keyStore   KeyStore
-	ledger     *recoverykit.Ledger
-	metaWake   chan struct{}
-	startedAt  time.Time
-	instanceID string
-	problems   []string
+	log       *slog.Logger
+	opts      Options
+	store     *store.Store
+	api       *api.Server
+	storages  *storages.Manager
+	discovery *discovery.Discoverer
+	scheduler *jobs.Scheduler
+	fetches   *jobs.Scheduler
+	restores  *jobs.Scheduler
+	verifies  *jobs.Scheduler
+	deletes   *jobs.Scheduler
+	remotes   *remotes.Manager
+	keyStore  KeyStore
+	ledger    *recoverykit.Ledger
+	metaWake  chan struct{}
+
+	backupLocksMu sync.Mutex
+	backupLocks   map[string]*backupLock
+	startedAt     time.Time
+	instanceID    string
+	problems      []string
 }
 
 // NodeName returns the PVE node name, which is the short host name.
@@ -140,8 +143,8 @@ func Run(ctx context.Context, opts Options) error {
 		opts.Locker = &cfs.Locker{Dir: filepath.Join(opts.PVEDir, "priv", "lock")}
 	}
 	d := &Daemon{log: opts.Logger, opts: opts, startedAt: time.Now(), instanceID: rand.Text(), keyStore: opts.KeyStore,
-		metaWake: make(chan struct{}, 1),
-		ledger:   recoverykit.NewLedger(filepath.Join(opts.PVEDir, "pve-rclone-backup", "kits.json"), opts.Locker)}
+		metaWake: make(chan struct{}, 1), backupLocks: map[string]*backupLock{},
+		ledger: recoverykit.NewLedger(filepath.Join(opts.PVEDir, "pve-rclone-backup", "kits.json"), opts.Locker)}
 
 	// One daemon per state directory: the store is opened, and interrupted
 	// jobs requeued, only by the daemon that owns it.
@@ -237,7 +240,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	d.deletes = jobs.New(jobs.Options{
 		Log: d.log, Store: st, Node: opts.Node, Kind: "delete", Workers: 1, Targets: d.storages.Targets,
-		Runner: &retention.Deleter{Log: d.log, Store: st, Repos: d.storages.Repo, OnRemoved: func(storeID, volname string) {
+		Runner: &retention.Deleter{Log: d.log, Store: st, Repos: d.storages.Repo, Lock: d.lockBackup, OnRemoved: func(storeID, volname string) {
 			d.api.Events().Publish("backup.removed", map[string]string{"storage": storeID, "volname": volname})
 		}},
 		Ready: func(id string) error {

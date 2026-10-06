@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -160,7 +161,47 @@ func (d *Daemon) pushDirty(ctx context.Context) {
 	}
 }
 
+// backupLock serializes the writes of one backup's remote documents.
+type backupLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockBackup serializes writes of a backup's remote documents within the
+// daemon: concurrent uploads of one meta document (a push and a deletion
+// marking it) interleave, which crypt's upload check then reports as
+// corruption, deleting the document.
+func (d *Daemon) lockBackup(storeID, volname string) (unlock func()) {
+	key := storeID + "\x00" + volname
+	d.backupLocksMu.Lock()
+	l := d.backupLocks[key]
+	if l == nil {
+		l = &backupLock{}
+		d.backupLocks[key] = l
+	}
+	l.refs++
+	d.backupLocksMu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		d.backupLocksMu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(d.backupLocks, key)
+		}
+		d.backupLocksMu.Unlock()
+	}
+}
+
 func (d *Daemon) pushOne(ctx context.Context, b *store.Backup) error {
+	defer d.lockBackup(b.StoreID, b.Volname)()
+	// The entry may have been pushed, changed or deleted while waiting.
+	b, err := d.store.GetBackup(ctx, b.StoreID, b.Volname)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil || !b.MetaDirty {
+		return err
+	}
 	rp, _, err := d.storages.Repo(b.StoreID)
 	if err != nil {
 		return err

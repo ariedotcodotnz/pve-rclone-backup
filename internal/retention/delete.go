@@ -34,6 +34,9 @@ type Deleter struct {
 	Repos     func(storeID string) (*repo.Repo, *config.Storage, error)
 	OnRemoved func(storeID, volname string)
 	Now       func() time.Time
+	// Lock, if set, serializes the deletion with other writes of the
+	// backup's remote documents (meta pushes).
+	Lock func(storeID, volname string) (unlock func())
 }
 
 // Run implements jobs.Runner.
@@ -46,6 +49,9 @@ func (d *Deleter) Run(ctx context.Context, t *jobs.Task) error {
 	var p DeleteParams
 	if err := json.Unmarshal([]byte(j.ParamsJSON), &p); err != nil {
 		return jobs.Permanent(err)
+	}
+	if d.Lock != nil {
+		defer d.Lock(j.StoreID, j.BackupVolname)()
 	}
 	rp, cfg, err := d.Repos(j.StoreID)
 	if errors.Is(err, storages.ErrNotReady) {
