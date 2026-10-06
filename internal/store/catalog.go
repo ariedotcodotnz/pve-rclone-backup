@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // StorageRow caches an rclone-backup storage and its repository binding.
@@ -215,7 +214,7 @@ func (s *Store) UpdateBackup(ctx context.Context, storeID, volname string, mutat
 
 // DirtyBackups returns entries whose meta document must be pushed.
 func (s *Store) DirtyBackups(ctx context.Context, limit int) ([]*Backup, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE meta_dirty = 1 ORDER BY id LIMIT ?", limit)
+	rows, err := s.db.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE meta_dirty = 1 ORDER BY id LIMIT ?", sqlLimit(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +398,7 @@ func (s *Store) NewestBackup(ctx context.Context, storeID, vmtype string, vmid i
 	}
 	var newest sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT MAX(backup_time) FROM backups WHERE storeid = ? AND vmtype = ? AND vmid = ?
-		AND state IN (`+strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")+`)`, args...).Scan(&newest)
+		AND state IN (`+placeholders(len(states))+`)`, args...).Scan(&newest)
 	return newest.Int64, err
 }
 

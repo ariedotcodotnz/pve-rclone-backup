@@ -218,7 +218,7 @@ func (s *Store) VerifyCandidates(ctx context.Context, storeID string, before int
 	rows, err := s.db.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups WHERE storeid = ? AND state = 'complete'
 		AND (verify_level < 3 OR verified_at IS NULL OR verified_at < ?)
 		ORDER BY CASE WHEN verify_level < 3 THEN 0 ELSE 1 END, COALESCE(verified_at, 0), backup_time DESC LIMIT ?`,
-		storeID, before, limit)
+		storeID, before, sqlLimit(limit))
 	if err != nil {
 		return nil, err
 	}

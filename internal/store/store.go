@@ -126,6 +126,18 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
+// placeholders returns n comma-separated SQL parameter placeholders.
+func placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
+
+// sqlLimit converts a limit where zero or less means unlimited, as the
+// listing functions take it, to SQLite's (-1 is unlimited).
+func sqlLimit(limit int) int {
+	if limit <= 0 {
+		return -1
+	}
+	return limit
+}
+
 // uriPathEscaper escapes a file name for the "file:" URI SQLite is given,
 // in which "?", "#" and "%" would otherwise start the query, start a
 // fragment or be decoded.

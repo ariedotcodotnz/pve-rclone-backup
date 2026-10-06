@@ -214,7 +214,7 @@ func (s *Store) GuestReplication(ctx context.Context, storeID, vmtype string, vm
 	}
 	var newest sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT MAX(backup_time) FROM jobs WHERE kind = 'replicate' AND storeid = ?
-		AND vmtype = ? AND vmid = ? AND state IN (`+strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")+`)`, args...).Scan(&newest)
+		AND vmtype = ? AND vmid = ? AND state IN (`+placeholders(len(states))+`)`, args...).Scan(&newest)
 	return newest.Int64, err
 }
 
@@ -242,7 +242,7 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]*Job, error) {
 		where, args = append(where, "storeid = ?"), append(args, f.StoreID)
 	}
 	if len(f.States) > 0 {
-		where = append(where, "state IN ("+strings.TrimSuffix(strings.Repeat("?,", len(f.States)), ",")+")")
+		where = append(where, "state IN ("+placeholders(len(f.States))+")")
 		for _, st := range f.States {
 			args = append(args, st)
 		}
@@ -389,8 +389,6 @@ func (s *Store) ClaimJob(ctx context.Context, opts ClaimOptions) (*Job, error) {
 	return out, nil
 }
 
-func placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
-
 // RenewLease extends the lease of a job held by owner.
 func (s *Store) RenewLease(ctx context.Context, id int64, owner string, leaseSeconds int64) error {
 	now := s.unix()
@@ -416,7 +414,7 @@ func (s *Store) RequeueInterrupted(ctx context.Context, active []string, toState
 			args = append(args, st)
 		}
 		rows, err := tx.QueryContext(ctx, "SELECT id, state FROM jobs WHERE state IN ("+
-			strings.TrimSuffix(strings.Repeat("?,", len(active)), ",")+")", args...)
+			placeholders(len(active))+")", args...)
 		if err != nil {
 			return err
 		}
@@ -562,7 +560,6 @@ func (s *Store) MakeDue(ctx context.Context, kind string, storeIDs, classes []st
 	if len(storeIDs) == 0 || len(classes) == 0 {
 		return 0, nil
 	}
-	placeholders := func(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
 	args := []any{now, kind, now}
 	for _, id := range storeIDs {
 		args = append(args, id)

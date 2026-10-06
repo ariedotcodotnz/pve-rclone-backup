@@ -740,3 +740,29 @@ func TestEqualLevelVerificationKept(t *testing.T) {
 		t.Fatalf("newer verification not taken: %+v", got)
 	}
 }
+
+// TestNonPositiveLimitMeansUnlimited: listing functions take a limit of zero
+// or less as no limit, like the other listers of this package.
+func TestNonPositiveLimitMeansUnlimited(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	_ = s.PutStorage(ctx, &StorageRow{StoreID: "offsite", Remote: "od", BasePath: "p", Source: "lab", ConfigHash: "h"})
+	for i := range 3 {
+		b := testBackup(fmt.Sprintf("b/%d", i), 100+i, fmt.Sprintf("s%d", i))
+		b.MetaDirty = true
+		if err := s.PutBackup(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, limit := range []int{0, -1} {
+		if dirty, err := s.DirtyBackups(ctx, limit); err != nil || len(dirty) != 3 {
+			t.Errorf("DirtyBackups(%d) = %d entries, %v", limit, len(dirty), err)
+		}
+		if cand, err := s.VerifyCandidates(ctx, "offsite", time.Now().Unix(), limit); err != nil || len(cand) != 3 {
+			t.Errorf("VerifyCandidates(%d) = %d entries, %v", limit, len(cand), err)
+		}
+	}
+	if dirty, _ := s.DirtyBackups(ctx, 2); len(dirty) != 2 {
+		t.Errorf("DirtyBackups(2) = %d entries", len(dirty))
+	}
+}
