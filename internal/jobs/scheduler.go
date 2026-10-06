@@ -228,14 +228,19 @@ func (s *Scheduler) remoteOf(storeID string) string {
 
 func (s *Scheduler) start(ctx context.Context, job *store.Job) {
 	jctx, cancel := context.WithCancelCause(ctx)
+	attempt := &runningJob{storeID: job.StoreID, cancel: cancel}
 	s.mu.Lock()
-	s.running[job.ID] = &runningJob{storeID: job.StoreID, cancel: cancel}
+	s.running[job.ID] = attempt
 	s.mu.Unlock()
 	s.publish(job)
 	s.wg.Go(func() {
 		defer func() {
 			s.mu.Lock()
-			delete(s.running, job.ID)
+			// A retry may already run the job again once its outcome is
+			// recorded: only this attempt's entry is removed.
+			if s.running[job.ID] == attempt {
+				delete(s.running, job.ID)
+			}
 			s.mu.Unlock()
 			cancel(nil)
 			s.Wake()
@@ -250,8 +255,15 @@ func (s *Scheduler) start(ctx context.Context, job *store.Job) {
 		}
 		stopLease()
 		s.finish(task, err, context.Cause(jctx))
+		if testHookFinished != nil {
+			testHookFinished(job.ID)
+		}
 	})
 }
+
+// testHookFinished, set by tests, runs after a job's outcome is recorded
+// and before its worker is cleaned up.
+var testHookFinished func(id int64)
 
 // keepLease renews the job's lease while it runs.
 func (s *Scheduler) keepLease(ctx context.Context, id int64) func() {

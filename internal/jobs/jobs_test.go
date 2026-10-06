@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -434,4 +435,50 @@ func TestNotReadyStoragesWait(t *testing.T) {
 	ready.Store("a", true)
 	h.s.Wake()
 	h.waitState(id, StateComplete)
+}
+
+// TestRetryDuringCleanup: a job retried right after its outcome is
+// recorded, before the old worker is cleaned up, keeps its new attempt
+// registered: it can be cancelled and counts toward the limits.
+func TestRetryDuringCleanup(t *testing.T) {
+	h := newHarness(t, 2, target("a", "r1", 2))
+	finished, proceed := make(chan int64, 1), make(chan struct{})
+	testHookFinished = func(id int64) {
+		select {
+		case finished <- id:
+			<-proceed
+		default:
+		}
+	}
+	t.Cleanup(func() { testHookFinished = nil })
+	var attempts atomic.Int32
+	cancelled := make(chan struct{})
+	h.setScript(func(ctx context.Context, task *Task) error {
+		if attempts.Add(1) == 1 {
+			return Permanent(errors.New("first attempt fails"))
+		}
+		<-ctx.Done()
+		close(cancelled)
+		return ctx.Err()
+	})
+	id := h.add("a", 1)
+	h.start()
+	<-finished // failed, but the old worker is not cleaned up yet
+	if err := h.s.Retry(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	for attempts.Load() < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(proceed) // the old worker's cleanup runs now
+	time.Sleep(50 * time.Millisecond)
+	if err := h.s.Cancel(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the retried attempt could not be cancelled")
+	}
+	h.waitState(id, StateCancelled)
 }
