@@ -72,9 +72,17 @@ ssh_vm() {
         -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes root@127.0.0.1 "$@"
 }
 
+ssh_probe() {
+    timeout 20 ssh -i "$dir/id_ed25519" -p "$ssh_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes root@127.0.0.1 true 2>/dev/null
+}
+
 wait_ssh() {
     deadline=$(($(date +%s) + ${1:-600}))
-    until ssh_vm true 2>/dev/null; do
+    # Each probe is bounded: QEMU accepts forwarded connections before the
+    # guest's sshd runs, and ssh then waits for a greeting indefinitely
+    # (ConnectTimeout does not cover that).
+    until ssh_probe; do
         if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -q true; then
             docker logs "$name" 2>&1 | tail -20 >&2
             die "VM exited before SSH came up"
