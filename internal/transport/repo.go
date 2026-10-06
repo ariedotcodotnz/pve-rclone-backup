@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"regexp"
 	"slices"
@@ -185,6 +186,11 @@ func (t *Target) List(ctx context.Context, dir string) ([]Entry, error) {
 			ent.Size, ent.StoredSize = x.Size(), base.Size()
 			if t.baseHash != rhash.None {
 				if ent.StoredHash, err = base.Hash(ctx, t.baseHash); err != nil {
+					// Backends that read the object to hash it (local) find
+					// it gone when it was deleted since the listing.
+					if errors.Is(err, os.ErrNotExist) || errors.Is(err, fs.ErrorObjectNotFound) {
+						continue
+					}
 					return nil, fmt.Errorf("transport: hash of %s: %w", e.Remote(), err)
 				}
 				ent.StoredHashType = t.baseHash.String()

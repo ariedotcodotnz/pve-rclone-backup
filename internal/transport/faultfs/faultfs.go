@@ -37,6 +37,9 @@ type Controller struct {
 	WrongHash func(remote string) bool
 	// Hide removes matching paths from listings and lookups.
 	Hide func(remote string) bool
+	// VanishAfterList deletes matching objects right after they are
+	// listed (still returning them), as a concurrent deletion would.
+	VanishAfterList func(remote string) bool
 
 	mu   sync.Mutex
 	puts map[string]int
@@ -135,6 +138,11 @@ func (f *Fs) List(ctx context.Context, dir string) (fs.DirEntries, error) {
 			continue
 		}
 		if o, ok := e.(fs.Object); ok {
+			if f.ctl.VanishAfterList != nil && f.ctl.VanishAfterList(o.Remote()) {
+				if err := o.Remove(ctx); err != nil {
+					return nil, err
+				}
+			}
 			out = append(out, &Object{Object: o, f: f})
 		} else {
 			out = append(out, e)

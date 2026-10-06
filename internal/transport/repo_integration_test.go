@@ -242,3 +242,28 @@ func TestOpenCryptKeepsKeysOutOfLogs(t *testing.T) {
 		t.Fatalf("OpenCrypt error lost its identity: %v", err)
 	}
 }
+
+// TestListSkipsObjectsDeletedMeanwhile: an object deleted between listing
+// a directory and hashing it (a deletion running elsewhere) is left out
+// instead of failing the listing.
+func TestListSkipsObjectsDeletedMeanwhile(t *testing.T) {
+	name := fmt.Sprintf("vn%d", time.Now().UnixNano())
+	faultfs.Register(name, &faultfs.Controller{VanishAfterList: func(remote string) bool { return strings.HasSuffix(remote, "/gone") }})
+	testStorage.SetSection(name, map[string]string{"type": "faulty", "id": name, "remote": t.TempDir()})
+	tgt, err := NewTarget(t.Context(), name+":")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"d/kept", "d/gone"} {
+		if _, err := tgt.PutBytes(t.Context(), n, []byte(n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := tgt.List(t.Context(), "d")
+	if err != nil {
+		t.Fatalf("listing failed: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "kept" {
+		t.Fatalf("entries = %+v", entries)
+	}
+}
