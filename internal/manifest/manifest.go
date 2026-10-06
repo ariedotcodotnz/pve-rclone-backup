@@ -28,10 +28,11 @@ const (
 	MaxManifestSize = 16 << 20
 	// MaxSmallDocSize bounds markers, source and meta documents.
 	MaxSmallDocSize = 1 << 20
-	// MaxSegments bounds the segments of one archive so that its manifest
-	// (about 300 bytes per segment, plus a guest configuration of up to
-	// 2 MiB) stays below MaxManifestSize: 2 TiB with the smallest segment
-	// size, 32 TiB with the default 1 GiB.
+	// MaxSegments bounds the segments new uploads are planned with, so that
+	// their manifest (about 300 bytes per segment, plus a guest
+	// configuration of up to 2 MiB) stays below MaxManifestSize: 2 TiB with
+	// the smallest segment size, 32 TiB with the default 1 GiB. Readers do
+	// not enforce it; MaxManifestSize is what limits them.
 	MaxSegments = 32768
 )
 
@@ -263,9 +264,6 @@ func (m *Manifest) Validate() error {
 	s := m.Segments
 	if s.Size <= 0 || s.Count != len(s.List) || s.Count < 1 || s.Naming != "part.%06d" {
 		return errors.New("manifest: invalid segment description")
-	}
-	if s.Count > MaxSegments {
-		return fmt.Errorf("manifest: %d segments, more than the %d a manifest can describe", s.Count, MaxSegments)
 	}
 	var total int64
 	for i, seg := range s.List {

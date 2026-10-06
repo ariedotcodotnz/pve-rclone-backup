@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -185,7 +186,13 @@ func (r *Runner) Run(ctx context.Context, t *jobs.Task) error {
 		p.Guest = gc
 	}
 	p.Generation, p.Collision = u.gen, id.Collision
-	u.segLen = cmp.Or(p.SegmentSize, cfg.SegmentSize)
+	planned, err := t.Store().Segments(ctx, t.Job().ID)
+	if err != nil {
+		return err
+	}
+	if u.segLen, err = chooseSegmentSize(planned, p.SegmentSize, cfg.SegmentSize, src.size); err != nil {
+		return err
+	}
 	p.SegmentSize = u.segLen
 	pj, err := json.Marshal(p)
 	if err != nil {
@@ -360,6 +367,28 @@ func segmentCount(size, segLen int64) int {
 	return max(1, int((size+segLen-1)/segLen))
 }
 
+// chooseSegmentSize returns the segment size of an upload: the one it was
+// planned with, or the configured one for a new upload. Before any segment
+// is uploaded the plan must fit in a manifest, and a planned size that does
+// not (refused earlier) gives way to the configured one, so that correcting
+// rclone-segment-size and retrying works. Uploads already under way keep
+// their size; their manifest size is checked when they are committed.
+func chooseSegmentSize(segs []store.Segment, planned, configured, archiveSize int64) (int64, error) {
+	if planned != 0 && slices.ContainsFunc(segs, func(s store.Segment) bool { return s.State != "pending" }) {
+		return planned, nil
+	}
+	size := cmp.Or(planned, configured)
+	if segmentCount(archiveSize, size) > manifest.MaxSegments {
+		size = configured
+	}
+	if n := segmentCount(archiveSize, size); n > manifest.MaxSegments {
+		needMiB := (archiveSize/manifest.MaxSegments + 1<<20 - 1) >> 20
+		return 0, jobs.Permanent(fmt.Errorf("the archive needs %d segments of %d bytes, more than %d; set rclone-segment-size to at least %dM",
+			n, size, manifest.MaxSegments, needMiB+1))
+	}
+	return size, nil
+}
+
 // planSegments creates the job's segment rows, keeping those of an earlier
 // run.
 func (u *upload) planSegments(ctx context.Context) error {
@@ -369,12 +398,9 @@ func (u *upload) planSegments(ctx context.Context) error {
 		return err
 	}
 	n := segmentCount(u.src.size, u.segLen)
-	if n > manifest.MaxSegments {
-		// Refused before uploading for hours: its manifest could not be
-		// committed.
-		needMiB := (u.src.size/manifest.MaxSegments + 1<<20 - 1) >> 20
-		return jobs.Permanent(fmt.Errorf("the archive needs %d segments of %d bytes, more than %d; set rclone-segment-size to at least %dM",
-			n, u.segLen, manifest.MaxSegments, needMiB+1))
+	// Rows of an earlier plan with more segments are not part of this one.
+	if err := u.t.Store().TruncateSegments(ctx, j.ID, n); err != nil {
+		return err
 	}
 	u.segs = make([]store.Segment, n)
 	for i := range n {

@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
 )
 
@@ -195,5 +197,36 @@ func TestSegmentCount(t *testing.T) {
 		if got := segmentCount(c.size, c.seg); got != c.want {
 			t.Errorf("segmentCount(%d, %d) = %d", c.size, c.seg, got)
 		}
+	}
+}
+
+func TestChooseSegmentSize(t *testing.T) {
+	const mib = int64(1) << 20
+	big := manifest.MaxSegments*64*mib + 1 // one segment too many at 64 MiB
+	uploaded := []store.Segment{{Index: 0, State: "uploaded"}}
+	pending := []store.Segment{{Index: 0, State: "pending"}}
+	cases := []struct {
+		name                         string
+		segs                         []store.Segment
+		planned, configured, archive int64
+		want                         int64
+	}{
+		{"new upload", nil, 0, 1024 * mib, big, 1024 * mib},
+		{"keeps its planned size", pending, 1024 * mib, 2048 * mib, big, 1024 * mib},
+		// Refused earlier, nothing uploaded: the corrected size applies.
+		{"refused size replaced", pending, 64 * mib, 128 * mib, big, 128 * mib},
+		{"refused size, nothing planned", nil, 64 * mib, 128 * mib, big, 128 * mib},
+		// Started before the limit existed: it continues as planned.
+		{"upload under way", uploaded, 64 * mib, 128 * mib, big, 64 * mib},
+	}
+	for _, c := range cases {
+		got, err := chooseSegmentSize(c.segs, c.planned, c.configured, c.archive)
+		if err != nil || got != c.want {
+			t.Errorf("%s: %d, %v; want %d", c.name, got, err, c.want)
+		}
+	}
+	_, err := chooseSegmentSize(nil, 0, 64*mib, big)
+	if !errors.Is(err, jobs.ErrPermanent) || !strings.Contains(err.Error(), "set rclone-segment-size to at least 65M") {
+		t.Errorf("too many segments: %v", err)
 	}
 }

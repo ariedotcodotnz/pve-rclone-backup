@@ -205,11 +205,17 @@ func TestMaxSegmentsFitInAManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Readers are limited by the document size only: manifests with more
+	// segments, as earlier versions could write, stay readable.
 	m.Segments.List = append(m.Segments.List, m.Segments.List[0])
 	m.Segments.List[MaxSegments].Index = MaxSegments
 	m.Segments.Count++
 	m.Archive.Size += segLen
-	if err := m.Validate(); err == nil {
-		t.Fatalf("%d segments accepted", m.Segments.Count)
+	m.Guest.Config, m.Guest.Firewall = "", nil
+	if data, err = Encode(m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeManifest(data); err != nil {
+		t.Fatalf("manifest with %d segments unreadable: %v", m.Segments.Count, err)
 	}
 }

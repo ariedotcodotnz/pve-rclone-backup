@@ -556,6 +556,13 @@ func (s *Store) RecordSegment(ctx context.Context, seg Segment, state string, ne
 	return out, nil
 }
 
+// TruncateSegments drops a job's segments from index n on, left over from an
+// earlier plan with more segments.
+func (s *Store) TruncateSegments(ctx context.Context, jobID int64, n int) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM job_segments WHERE job_id = ? AND idx >= ?", jobID, n)
+	return err
+}
+
 // Segments returns the segments of a job in order.
 func (s *Store) Segments(ctx context.Context, jobID int64) ([]Segment, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT job_id, idx, start_offset, size, sha256, stored_size,
