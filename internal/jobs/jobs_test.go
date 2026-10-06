@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rclone/rclone/lib/pacer"
+
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/config"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -537,4 +539,19 @@ func TestRoundRobinIsFair(t *testing.T) {
 		t.Fatalf("first six starts %v: %v", starts()[:6], count)
 	}
 	close(release)
+}
+
+// TestRetryAfterIsAMinimum: a provider's Retry-After delays the next
+// attempt beyond the normal backoff.
+func TestRetryAfterIsAMinimum(t *testing.T) {
+	h := newHarness(t, 1, target("a", "r1", 1))
+	h.setScript(func(context.Context, *Task) error {
+		return pacer.RetryAfterError(errors.New("429 Too Many Requests"), 10*time.Minute)
+	})
+	id := h.add("a", 1)
+	h.start()
+	j := h.waitState(id, StateRetryWait)
+	if j.ErrorClass != "throttled" || j.NextAttemptAt == nil || *j.NextAttemptAt < time.Now().Add(9*time.Minute).Unix() {
+		t.Fatalf("throttled job = %+v (next attempt in %ds)", j, *j.NextAttemptAt-time.Now().Unix())
+	}
 }

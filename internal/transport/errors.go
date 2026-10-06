@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rclone/rclone/backend/crypt"
 	onedriveapi "github.com/rclone/rclone/backend/onedrive/api"
@@ -63,6 +64,12 @@ func containsAny(s string, needles []string) bool {
 		}
 	}
 	return false
+}
+
+// RetryAfter returns the delay a provider asked for before retrying, if
+// the error carries one (HTTP Retry-After).
+func RetryAfter(err error) (time.Duration, bool) {
+	return pacer.IsRetryAfter(err)
 }
 
 // Classify maps an error from rclone or this package to a Class.

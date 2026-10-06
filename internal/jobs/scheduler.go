@@ -405,6 +405,10 @@ func (s *Scheduler) retryPolicy(ctx context.Context, j store.Job, remote string,
 	// Transient, throttled, local I/O and (bounded) unknown errors.
 	attempts := j.Attempts + 1
 	next := now.Add(Backoff(attempts, s.opts.Rand))
+	// A provider's Retry-After is a minimum.
+	if d, ok := transport.RetryAfter(err); ok {
+		next = later(next, now.Add(min(d, backoffMax)))
+	}
 	if j.StartedAt != nil && now.Sub(time.Unix(*j.StartedAt, 0)) > stallAlertAfter {
 		s.raise(ctx, fmt.Sprintf("stalled:%d", j.ID), "warning", j.StoreID, fmt.Sprintf(
 			"Upload of %s to %s has been failing for over a day: %s", j.BackupVolname, j.StoreID, msg))
@@ -540,4 +544,11 @@ func (s *Scheduler) Running() []int64 {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
