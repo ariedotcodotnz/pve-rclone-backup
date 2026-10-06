@@ -333,26 +333,55 @@ func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*B
 			if b.StoreID != storeID {
 				return fmt.Errorf("store: catalogue entry %s belongs to storage %s, not %s", b.Volname, b.StoreID, storeID)
 			}
-			if p, ok := prev[b.Volname]; ok && p.ArchiveSHA256 == b.ArchiveSHA256 {
-				// A deeper earlier verification, or one as deep and not
-				// older, still holds unless the backup is damaged now.
-				newer := b.VerifiedAt != nil && (p.VerifiedAt == nil || *b.VerifiedAt >= *p.VerifiedAt)
-				if b.State != "damaged" && (p.VerifyLevel > b.VerifyLevel || p.VerifyLevel == b.VerifyLevel && !newer) {
-					b.VerifyLevel, b.VerifiedAt, b.VerifyResult = p.VerifyLevel, p.VerifiedAt, p.VerifyResult
-				}
-				// Local changes not yet pushed win over the remote state, as
-				// does the local state when the remote meta is unusable.
-				if p.MetaDirty || b.MetaUnknown {
-					b.Notes, b.Protected, b.MetaDirty, b.MetaRev = p.Notes, p.Protected, p.MetaDirty, p.MetaRev
-					b.DeleteAfter, b.TombstoneAt, b.TombstoneReason, b.TombstoneBy = p.DeleteAfter, p.TombstoneAt, p.TombstoneReason, p.TombstoneBy
-					if p.State == "tombstoned" || b.State == "tombstoned" {
-						b.State = p.State
-					}
-				}
+			if p, ok := prev[b.Volname]; ok {
+				mergeLocal(p, b)
 			}
 			if err := putBackup(ctx, tx, b); err != nil {
 				return fmt.Errorf("store: replace catalogue %s: %w", b.Volname, err)
 			}
+		}
+		return nil
+	})
+}
+
+// mergeLocal carries over into b, an entry built from the remote, the local
+// state of p, the existing entry of the same archive: deeper or newer local
+// verification, and notes, protection and tombstone when they were changed
+// locally and not pushed yet or when the remote meta document is unusable.
+func mergeLocal(p, b *Backup) {
+	if p.ArchiveSHA256 != b.ArchiveSHA256 {
+		return
+	}
+	// A deeper earlier verification, or one as deep and not older, still
+	// holds unless the backup is damaged now.
+	newer := b.VerifiedAt != nil && (p.VerifiedAt == nil || *b.VerifiedAt >= *p.VerifiedAt)
+	if b.State != "damaged" && (p.VerifyLevel > b.VerifyLevel || p.VerifyLevel == b.VerifyLevel && !newer) {
+		b.VerifyLevel, b.VerifiedAt, b.VerifyResult = p.VerifyLevel, p.VerifiedAt, p.VerifyResult
+	}
+	if p.MetaDirty || b.MetaUnknown {
+		b.Notes, b.Protected, b.MetaDirty, b.MetaRev = p.Notes, p.Protected, p.MetaDirty, p.MetaRev
+		b.DeleteAfter, b.TombstoneAt, b.TombstoneReason, b.TombstoneBy = p.DeleteAfter, p.TombstoneAt, p.TombstoneReason, p.TombstoneBy
+		if p.State == "tombstoned" || b.State == "tombstoned" {
+			b.State = p.State
+		}
+	}
+}
+
+// MergeBackup stores an entry built from the remote (a replicated backup),
+// keeping the local state of an existing entry of the same archive like
+// ReplaceCatalog does.
+func (s *Store) MergeBackup(ctx context.Context, b *Backup) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		p, err := scanBackup(tx.QueryRowContext(ctx,
+			"SELECT "+backupColumns+" FROM backups WHERE storeid = ? AND volname = ?", b.StoreID, b.Volname))
+		switch {
+		case err == nil:
+			mergeLocal(p, b)
+		case !errors.Is(err, ErrNotFound) && !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		if err := putBackup(ctx, tx, b); err != nil {
+			return fmt.Errorf("store: merge backup %s:%s: %w", b.StoreID, b.Volname, err)
 		}
 		return nil
 	})

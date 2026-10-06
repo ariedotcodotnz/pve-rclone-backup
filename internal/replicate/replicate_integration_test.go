@@ -614,3 +614,45 @@ func TestShutdownRequeuesAndResumes(t *testing.T) {
 		t.Fatalf("no interruption recorded:\n%s", e.events(id))
 	}
 }
+
+// TestRediscoveryKeepsLocalMetadata: finding an archive that is already
+// replicated must not reset the catalogue entry: unpushed local changes and
+// deeper verification survive, and so do notes, protection and tombstone
+// when the remote meta document is unusable.
+func TestRediscoveryKeepsLocalMetadata(t *testing.T) {
+	ctx := t.Context()
+	e := newEnv(t)
+	path, _ := e.archive(100, 70<<10, 1)
+	e.start()
+	j := e.wait(e.queue(path), jobs.StateComplete)
+
+	b, err := e.st.GetBackup(ctx, "offsite", j.BackupVolname)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Unix()
+	b.Notes, b.Protected, b.MetaDirty, b.VerifyLevel, b.VerifiedAt, b.VerifyResult = "changed here", true, true, 3, &at, "ok"
+	if err := e.st.PutBackup(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	e.wait(e.queueKey(path, "-again"), jobs.StateComplete)
+	if got, _ := e.st.GetBackup(ctx, "offsite", j.BackupVolname); got.Notes != "changed here" || !got.Protected || !got.MetaDirty || got.VerifyLevel != 3 {
+		t.Fatalf("rediscovery reset the local state: %+v", got)
+	}
+
+	b.MetaDirty = false
+	if err := e.st.PutBackup(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	tgt, err := e.rp.Target(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tgt.PutBytes(ctx, backupID.Path(layout.MetaName), []byte("unusable")); err != nil {
+		t.Fatal(err)
+	}
+	e.wait(e.queueKey(path, "-third"), jobs.StateComplete)
+	if got, _ := e.st.GetBackup(ctx, "offsite", j.BackupVolname); got.Notes != "changed here" || !got.Protected {
+		t.Fatalf("an unusable remote meta document reset the entry: %+v", got)
+	}
+}

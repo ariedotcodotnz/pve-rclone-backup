@@ -327,7 +327,10 @@ func (r *Runner) chooseIdentity(ctx context.Context, u *upload, base layout.Back
 // present records a backup that is already in the repository.
 func (r *Runner) present(ctx context.Context, u *upload, m *manifest.Manifest) error {
 	meta, err := u.rp.ReadMeta(ctx, u.gen, u.id)
-	if errors.Is(err, repo.ErrInvalidDocument) {
+	invalid := errors.Is(err, repo.ErrInvalidDocument)
+	if invalid {
+		// Its notes, protection and tombstone are unknown; the catalogue
+		// keeps what it has (see catalog.Entry).
 		meta, err = nil, nil
 	}
 	if err != nil {
@@ -337,7 +340,7 @@ func (r *Runner) present(ctx context.Context, u *upload, m *manifest.Manifest) e
 	if meta != nil && meta.Tombstone != nil {
 		state = repo.StateTombstoned
 	}
-	b, err := r.catalogue(ctx, u, m, meta, state)
+	b, err := r.catalogue(ctx, u, repo.ScannedBackup{Generation: u.gen, ID: u.id, State: state, Manifest: m, Meta: meta, MetaInvalid: invalid})
 	if err != nil {
 		return err
 	}
@@ -347,12 +350,15 @@ func (r *Runner) present(ctx context.Context, u *upload, m *manifest.Manifest) e
 	})
 }
 
-func (r *Runner) catalogue(ctx context.Context, u *upload, m *manifest.Manifest, meta *manifest.Meta, state string) (*store.Backup, error) {
-	b, err := catalog.Entry(u.cfg.ID, repo.ScannedBackup{Generation: u.gen, ID: u.id, State: state, Manifest: m, Meta: meta}, r.opts.Now())
+// catalogue records a backup in the catalogue, keeping the local state of
+// an existing entry of the same archive (unpushed changes, deeper
+// verification).
+func (r *Runner) catalogue(ctx context.Context, u *upload, sb repo.ScannedBackup) (*store.Backup, error) {
+	b, err := catalog.Entry(u.cfg.ID, sb, r.opts.Now())
 	if err != nil {
 		return nil, err
 	}
-	if err := r.opts.Store.PutBackup(ctx, b); err != nil {
+	if err := r.opts.Store.MergeBackup(ctx, b); err != nil {
 		return nil, err
 	}
 	if r.opts.OnCommit != nil {
@@ -594,7 +600,7 @@ func (r *Runner) commit(ctx context.Context, u *upload, p params) error {
 	if err := u.rp.Commit(ctx, m, meta); err != nil {
 		return err
 	}
-	b, err := r.catalogue(ctx, u, m, meta, repo.StateComplete)
+	b, err := r.catalogue(ctx, u, repo.ScannedBackup{Generation: u.gen, ID: u.id, State: repo.StateComplete, Manifest: m, Meta: meta})
 	if err != nil {
 		return err
 	}
