@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
 )
 
@@ -171,21 +173,61 @@ func TestGuestName(t *testing.T) {
 	}
 }
 
+// testLocker returns a cluster lock below dir, which (like pmxcfs) provides
+// the priv directory.
+func testLocker(t *testing.T, dir string) *cfs.Locker {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "priv"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return &cfs.Locker{Dir: filepath.Join(dir, "priv", "lock")}
+}
+
 func TestLoadIdentity(t *testing.T) {
 	dir := t.TempDir()
-	a, err := LoadIdentity(dir)
+	lock := testLocker(t, dir)
+	a, err := LoadIdentity(t.Context(), dir, lock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := LoadIdentity(dir)
+	b, err := LoadIdentity(t.Context(), dir, lock)
 	if err != nil || b.UUID != a.UUID {
 		t.Fatalf("identity changed: %v %v %v", a, b, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "pve-rclone-backup", "source.json"), []byte(`{"uuid":"bogus"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadIdentity(dir); err == nil {
+	if _, err := LoadIdentity(t.Context(), dir, lock); err == nil {
 		t.Fatal("invalid identity accepted")
+	}
+}
+
+// TestLoadIdentityConcurrently: nodes creating the identity at the same time
+// all end up with the same one.
+func TestLoadIdentityConcurrently(t *testing.T) {
+	dir := t.TempDir()
+	lock := testLocker(t, dir)
+	uuids := make([]string, 8)
+	var wg sync.WaitGroup
+	for i := range uuids {
+		wg.Go(func() {
+			id, err := LoadIdentity(t.Context(), dir, lock)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			uuids[i] = id.UUID
+		})
+	}
+	wg.Wait()
+	final, err := readIdentity(filepath.Join(dir, "pve-rclone-backup", "source.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, u := range uuids {
+		if u != final.UUID {
+			t.Errorf("caller %d got identity %s, but %s is stored", i, u, final.UUID)
+		}
 	}
 }
 

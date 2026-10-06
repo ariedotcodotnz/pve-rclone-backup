@@ -29,7 +29,7 @@ import (
 )
 
 func (d *Daemon) identity() (*replicate.Identity, string, error) {
-	id, err := replicate.LoadIdentity(d.opts.PVEDir)
+	id, err := replicate.LoadIdentity(context.Background(), d.opts.PVEDir, d.opts.Locker)
 	members, _ := cluster.ReadMembers(d.opts.PVEDir, d.opts.Node)
 	return id, members.Cluster, err
 }

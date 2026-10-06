@@ -28,7 +28,6 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/discovery"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
-	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cluster"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/recoverykit"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/remotes"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/replicate"
@@ -208,11 +207,7 @@ func Run(ctx context.Context, opts Options) error {
 	})
 	runner := replicate.New(replicate.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Repos: d.storages.Repo,
-		Identity: func() (*replicate.Identity, string, error) {
-			id, err := replicate.LoadIdentity(opts.PVEDir)
-			members, _ := cluster.ReadMembers(opts.PVEDir, opts.Node)
-			return id, members.Cluster, err
-		},
+		Identity: d.identity,
 		OnCommit: func(b *store.Backup) { d.api.Events().Publish("backup.added", backupView(b)) },
 	})
 	d.scheduler = jobs.New(jobs.Options{
