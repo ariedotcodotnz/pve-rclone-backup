@@ -58,6 +58,8 @@ type Options struct {
 	// IdleTimeout aborts abandoned sessions (default 15m).
 	IdleTimeout time.Duration
 	Now         func() time.Time
+	// OnConfigured is called after a remote was set up or reconnected.
+	OnConfigured func(name string)
 }
 
 // Manager owns the remotes and the setup session.
@@ -368,6 +370,9 @@ func (m *Manager) step(s *session, fn func(context.Context) (*fs.ConfigOut, erro
 		case out == nil || out.State == "":
 			s.status, s.out = apiv1.SetupDone, nil
 			m.log.Info("remote configured", "remote", s.name, "reconnect", s.reconnect)
+			if m.opts.OnConfigured != nil {
+				go m.opts.OnConfigured(s.name)
+			}
 		default:
 			s.status, s.out = apiv1.SetupQuestion, out
 		}

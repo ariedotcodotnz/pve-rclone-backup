@@ -268,9 +268,14 @@ func TestFailurePolicy(t *testing.T) {
 	if j, _ := h.st.GetJob(t.Context(), b2); j.State != StateQueued {
 		t.Fatalf("job of a paused remote is %s", j.State)
 	}
-	// After reconnecting, a successful job clears the pause and the alert.
-	h.s.ResumeRemote("r2")
+	// After reconnecting, the paused job is due at once (not when the pause
+	// would have ended), and a successful job clears the pause and alert.
+	mu.Lock()
+	delete(errs, auth)
+	mu.Unlock()
+	h.s.ResumeRemote(t.Context(), "r2")
 	h.waitState(b2, StateComplete)
+	h.waitState(auth, StateComplete)
 	if alerts, _ := h.st.ActiveAlerts(t.Context()); len(alerts) != 0 {
 		t.Fatalf("alerts after success = %+v", alerts)
 	}
@@ -554,4 +559,26 @@ func TestRetryAfterIsAMinimum(t *testing.T) {
 	if j.ErrorClass != "throttled" || j.NextAttemptAt == nil || *j.NextAttemptAt < time.Now().Add(9*time.Minute).Unix() {
 		t.Fatalf("throttled job = %+v (next attempt in %ds)", j, *j.NextAttemptAt-time.Now().Unix())
 	}
+}
+
+// TestResumeAfterRestart: jobs deferred by a pause are made due when the
+// remote is resumed, also after a restart lost the in-memory pause.
+func TestResumeAfterRestart(t *testing.T) {
+	h := newHarness(t, 1, target("a", "r1", 1))
+	h.setScript(complete)
+	id := h.add("a", 1)
+	later := time.Now().Add(time.Hour).Unix()
+	if _, err := h.st.UpdateJob(t.Context(), id, nil, "", func(j *store.Job) error {
+		j.State, j.ErrorClass, j.NextAttemptAt = StateRetryWait, "auth_required", &later
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	time.Sleep(100 * time.Millisecond)
+	if j, _ := h.st.GetJob(t.Context(), id); j.State != StateRetryWait {
+		t.Fatalf("deferred job ran early: %s", j.State)
+	}
+	h.s.ResumeRemote(t.Context(), "r1")
+	h.waitState(id, StateComplete)
 }

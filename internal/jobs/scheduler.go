@@ -427,7 +427,7 @@ func (s *Scheduler) clearAlerts(ctx context.Context, j store.Job, remote string)
 	ids := []string{fmt.Sprintf("stalled:%d", j.ID)}
 	if remote != "" {
 		ids = append(ids, "auth:"+remote, "quota:"+remote)
-		s.ResumeRemote(remote)
+		s.ResumeRemote(ctx, remote)
 	}
 	for _, id := range ids {
 		if err := s.opts.Store.ClearAlert(ctx, id); err != nil {
@@ -448,16 +448,36 @@ func (s *Scheduler) pause(remote string, until time.Time, reason string) {
 	}
 }
 
-// ResumeRemote lifts a pause (after the remote was reconnected).
-func (s *Scheduler) ResumeRemote(remote string) {
+// ResumeRemote lifts a pause (after the remote was reconnected or a job
+// succeeded on it) and makes the jobs deferred by it due now. The jobs'
+// deferral outlives the in-memory pause, e.g. a daemon restart.
+func (s *Scheduler) ResumeRemote(ctx context.Context, remote string) {
 	s.mu.Lock()
-	_, ok := s.paused[remote]
+	_, paused := s.paused[remote]
 	delete(s.paused, remote)
 	s.mu.Unlock()
-	if ok {
-		s.log.Info("resuming uploads to remote", "remote", remote)
+	var ids []string
+	for _, t := range s.opts.Targets() {
+		if t.Remote == remote {
+			ids = append(ids, t.ID)
+		}
+	}
+	n, err := s.opts.Store.MakeDue(ctx, s.opts.Kind, ids,
+		[]string{string(transport.ClassAuth), string(transport.ClassQuota)}, s.opts.Now().Unix())
+	if err != nil {
+		s.log.Warn("resume jobs of remote", "remote", remote, "err", err)
+	}
+	if paused || n > 0 {
+		s.log.Info("resuming jobs of remote", "remote", remote, "jobs", n)
 		s.Wake()
 	}
+}
+
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // Paused returns the current pauses by remote.
@@ -544,11 +564,4 @@ func (s *Scheduler) Running() []int64 {
 	}
 	slices.Sort(ids)
 	return ids
-}
-
-func later(a, b time.Time) time.Time {
-	if b.After(a) {
-		return b
-	}
-	return a
 }

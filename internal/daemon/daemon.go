@@ -185,7 +185,15 @@ func Run(ctx context.Context, opts Options) error {
 			}
 		},
 	})
-	d.remotes = remotes.New(remotes.Options{Log: d.log, Users: d.remoteUsers})
+	d.remotes = remotes.New(remotes.Options{Log: d.log, Users: d.remoteUsers, OnConfigured: func(name string) {
+		// A reconnected remote takes jobs again at once, not when the
+		// pause for its rejected credentials would have ended.
+		for _, s := range []*jobs.Scheduler{d.scheduler, d.fetches, d.restores, d.verifies, d.deletes} {
+			if s != nil {
+				s.ResumeRemote(ctx, name)
+			}
+		}
+	}})
 	ncfg := d.loadNodeConfig()
 	d.discovery = discovery.New(discovery.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir,

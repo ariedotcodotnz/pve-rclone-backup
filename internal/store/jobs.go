@@ -556,6 +556,29 @@ func (s *Store) RecordSegment(ctx context.Context, seg Segment, state string, ne
 	return out, nil
 }
 
+// MakeDue makes jobs of the given storages that wait after an error of one
+// of the given classes due at now, and returns how many there were.
+func (s *Store) MakeDue(ctx context.Context, kind string, storeIDs, classes []string, now int64) (int64, error) {
+	if len(storeIDs) == 0 || len(classes) == 0 {
+		return 0, nil
+	}
+	placeholders := func(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
+	args := []any{now, kind, now}
+	for _, id := range storeIDs {
+		args = append(args, id)
+	}
+	for _, c := range classes {
+		args = append(args, c)
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET next_attempt_at = ? WHERE kind = ? AND state = 'retry_wait'"+
+		" AND next_attempt_at > ? AND storeid IN ("+placeholders(len(storeIDs))+")"+
+		" AND error_class IN ("+placeholders(len(classes))+")", args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // TruncateSegments drops a job's segments from index n on, left over from an
 // earlier plan with more segments.
 func (s *Store) TruncateSegments(ctx context.Context, jobID int64, n int) error {
