@@ -65,8 +65,9 @@ func ProfileFor(backend string) (Profile, error) {
 // is used concurrently, typically from TestMain.
 func RegisterProfile(p Profile) { profiles[p.Backend] = p }
 
-// SupportedBackends lists backends with a profile.
-func SupportedBackends() []string { return []string{"onedrive"} }
+// SetupProviders lists the backends that remote setup offers. Other
+// profiles (local, memory) exist for tests and remotes configured by hand.
+func SetupProviders() []string { return []string{"onedrive"} }
 
 // CheckSegmentSize validates a segment size against the profile.
 func (p Profile) CheckSegmentSize(size int64, encrypted bool) error {

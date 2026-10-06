@@ -294,7 +294,7 @@ type Provider struct {
 type Remote struct {
 	Name        string     `json:"name"`
 	Type        string     `json:"type"`
-	Supported   bool       `json:"supported"`
+	Supported   bool       `json:"supported"`  // this release can use the backend (has a profile)
 	Authorized  bool       `json:"authorized"` // has an OAuth refresh token (OAuth backends)
 	TokenExpiry *time.Time `json:"token_expiry,omitempty"`
 	CustomApp   bool       `json:"custom_app"` // uses its own OAuth client ID

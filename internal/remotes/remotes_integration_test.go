@@ -220,9 +220,16 @@ func TestListDeleteTest(t *testing.T) {
 	loc, _ := repotest.Remote(t, nil)
 	other, _ := repotest.Remote(t, nil)
 	m := newManager(map[string][]string{loc.Remote: {"offsite"}})
+	// Supported means the backend has a profile (the test backend does),
+	// whether or not remote setup offers it.
 	r, err := m.Get(loc.Remote)
-	if err != nil || len(r.Storages) != 1 || r.Supported {
+	if err != nil || len(r.Storages) != 1 || !r.Supported {
 		t.Fatalf("remote = %+v, %v", r, err)
+	}
+	repotest.Storage.SetSection("unprofiled", map[string]string{"type": "sftp"})
+	defer repotest.Storage.DeleteSection("unprofiled")
+	if r, err := m.Get("unprofiled"); err != nil || r.Supported {
+		t.Fatalf("remote without a profile = %+v, %v", r, err)
 	}
 	if err := m.Delete(loc.Remote); !errors.Is(err, ErrInUse) {
 		t.Fatalf("delete of a used remote: %v", err)

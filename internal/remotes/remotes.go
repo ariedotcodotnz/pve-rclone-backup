@@ -90,7 +90,7 @@ func New(opts Options) *Manager {
 // Providers lists the supported backends.
 func Providers() []apiv1.Provider {
 	var out []apiv1.Provider
-	for _, name := range transport.SupportedBackends() {
+	for _, name := range transport.SetupProviders() {
 		p, err := transport.ProfileFor(name)
 		if err != nil {
 			continue
@@ -131,7 +131,7 @@ func view(name string, users []string) apiv1.Remote {
 	r := apiv1.Remote{Name: name, Type: get("type"), DriveType: get("drive_type"), DriveID: get("drive_id"),
 		CustomApp: get("client_id") != "", Storages: append([]string{}, users...)}
 	_, err := transport.ProfileFor(r.Type)
-	r.Supported = err == nil && slices.Contains(transport.SupportedBackends(), r.Type)
+	r.Supported = err == nil
 	if tok := get("token"); tok != "" {
 		var t struct {
 			RefreshToken string    `json:"refresh_token"`
@@ -269,9 +269,9 @@ func (m *Manager) Start(ctx context.Context, req apiv1.RemoteSetupRequest, recon
 		if configured(req.Name) {
 			return apiv1.RemoteSetup{}, fmt.Errorf("%w: %s", ErrExists, req.Name)
 		}
-		if !slices.Contains(transport.SupportedBackends(), provider) {
+		if !slices.Contains(transport.SetupProviders(), provider) {
 			return apiv1.RemoteSetup{}, fmt.Errorf("%w: provider %q is not supported (supported: %s)", ErrInvalid, provider,
-				strings.Join(transport.SupportedBackends(), ", "))
+				strings.Join(transport.SetupProviders(), ", "))
 		}
 	}
 	params, err := backendParams(provider, req.Params)
