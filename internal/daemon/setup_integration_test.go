@@ -17,6 +17,8 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cfs"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/recoverykit"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 )
@@ -227,5 +229,33 @@ func TestRemoteEndpoints(t *testing.T) {
 	}
 	if err := c.Do(ctx, http.MethodGet, "/v1/remote-setup/nope", nil, nil); !client.IsCode(err, apiv1.CodeNotFound) {
 		t.Fatalf("unknown session: %v", err)
+	}
+}
+
+// TestKitImportRefusesInjectedSettings: remote settings from a kit that
+// could not be stored as they are (a line break would add a section to
+// remotes.conf) do not create the remote.
+func TestKitImportRefusesInjectedSettings(t *testing.T) {
+	e := withKeyStore(t, newEnv(t))
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	k := recoverykit.New("pve-old", time.Now())
+	k.Repos = append(k.Repos, recoverykit.Repo{RepoUUID: repo.NewUUID(), StorageID: "offsite", Remote: "crafted",
+		Path: "pve-backups", Source: "homelab", Encryption: "none",
+		RemoteConfig: map[string]string{"type": "onedrive", "token": "{}\n\n[injected]\ntype = local"}})
+	text, _, err := recoverykit.Encode(k, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported []apiv1.KitRepoResult
+	if err := client.New(e.socket).Do(t.Context(), http.MethodPost, "/v1/recovery-kit/import",
+		apiv1.KitRequest{Kit: text, ImportToken: true}, &imported); err != nil {
+		t.Fatal(err)
+	}
+	if len(imported) != 1 || imported[0].RemoteConfig != "invalid" {
+		t.Fatalf("import = %+v", imported)
+	}
+	if repotest.Storage.HasSection("crafted") || repotest.Storage.HasSection("injected") {
+		t.Fatal("remote created from injected settings")
 	}
 }

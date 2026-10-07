@@ -160,6 +160,12 @@ func (s *RemoteStore) GetValue(section, key string) (string, bool) {
 }
 
 func (s *RemoteStore) SetValue(section, key, value string) {
+	// rclone's interface has no error: an entry that would corrupt the
+	// file is refused here, where it can still be dropped on its own.
+	if err := CheckEntry(section, key, value); err != nil {
+		s.log.Error("refusing remote setting", "err", err)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cur, ok := s.data[section][key]; ok && cur == value {
@@ -242,7 +248,11 @@ func (s *RemoteStore) Flush(ctx context.Context) error {
 			return fmt.Errorf("read %s: %w", s.path, err)
 		}
 		apply(cur, pending)
-		if err := writeFileAtomic(s.path, encodeINI(cur)); err != nil {
+		data, err := encodeINI(cur)
+		if err != nil {
+			return err
+		}
+		if err := writeFileAtomic(s.path, data); err != nil {
 			return err
 		}
 		merged = cur

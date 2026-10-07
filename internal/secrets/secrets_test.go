@@ -29,7 +29,11 @@ func testDir(t *testing.T) (dir string, lock *cfs.Locker) {
 
 func TestINIRoundTrip(t *testing.T) {
 	in := sections{"od": {"type": "onedrive", "token": `{"access_token":"a=b"}`}, "b": {"type": "local"}}
-	out, err := parseINI(encodeINI(in))
+	data, err := encodeINI(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := parseINI(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,5 +306,42 @@ func TestRemoteStoreSeesOtherNodesChanges(t *testing.T) {
 	}
 	if v, _ := here.GetValue("od", "drive_id"); v != "local-change" || here.Pending() != 1 {
 		t.Fatalf("pending local change lost: %q, %d pending", v, here.Pending())
+	}
+}
+
+// TestRemoteStoreRefusesInjection: values with line breaks (e.g. from a
+// crafted recovery kit) cannot add sections or settings to remotes.conf.
+func TestRemoteStoreRefusesInjection(t *testing.T) {
+	dir, lock := testDir(t)
+	path := RemotesPath(dir)
+	s := NewRemoteStore(path, lock, quiet())
+	_ = s.Load()
+	s.SetValue("od", "type", "onedrive")
+	s.SetValue("od", "token", "{}\n\n[od2]\ntype = local")
+	s.SetValue("od", "x\ny", "v")
+	s.SetValue("od]\n[od3", "type", "local")
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := NewRemoteStore(path, lock, quiet())
+	if err := other.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := other.GetSectionList(); len(got) != 1 || got[0] != "od" || len(other.GetKeyList("od")) != 1 {
+		t.Fatalf("sections %v, keys %v; file:\n%s", got, other.GetKeyList("od"), raw)
+	}
+	for _, c := range []struct{ section, key, value string }{
+		{"od", "token", "a\nb"}, {"od", "k=v", "x"}, {"od", "#k", "x"}, {"o[d", "", ""}, {"od", "k", " padded "},
+	} {
+		if CheckEntry(c.section, c.key, c.value) == nil {
+			t.Errorf("CheckEntry(%q, %q, %q) accepted", c.section, c.key, c.value)
+		}
+	}
+	if _, err := encodeINI(sections{"od": {"token": "a\n[x]"}}); err == nil {
+		t.Error("encodeINI wrote a value with a line break")
 	}
 }

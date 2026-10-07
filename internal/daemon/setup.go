@@ -363,6 +363,14 @@ func (d *Daemon) importRemote(kr recoverykit.Repo, enabled bool) string {
 	if _, err := transport.ProfileFor(kr.RemoteConfig["type"]); err != nil {
 		return "skipped"
 	}
+	// A kit is untrusted input: settings that could not be stored as they
+	// are (line breaks would add sections to remotes.conf) are refused.
+	for k, v := range kr.RemoteConfig {
+		if err := secrets.CheckEntry(kr.Remote, k, v); err != nil {
+			d.log.Warn("not creating transport remote from recovery kit", "remote", kr.Remote, "err", err)
+			return "invalid"
+		}
+	}
 	for k, v := range kr.RemoteConfig {
 		data.SetValue(kr.Remote, k, v)
 	}

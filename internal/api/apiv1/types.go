@@ -442,7 +442,7 @@ type KitRepoResult struct {
 	Source       string `json:"source"`
 	Encryption   string `json:"encryption"`
 	Keys         string `json:"keys,omitempty"`          // imported | merged | present | none
-	RemoteConfig string `json:"remote_config,omitempty"` // created | exists | not_in_kit | skipped
+	RemoteConfig string `json:"remote_config,omitempty"` // created | exists | not_in_kit | skipped | invalid
 	OK           bool   `json:"ok"`
 	Error        string `json:"error,omitempty"`
 }
