@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* Keep names such as rclone-replicate-from, --client-secret-file or
+   pve-backups on one line in table key columns. */
+.md-typeset table:not([class]) td:first-child code,
+.md-typeset table:not([class]) td:nth-child(2) code:only-child {
+  white-space: nowrap;
+}

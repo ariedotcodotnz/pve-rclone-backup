@@ -14,3 +14,7 @@
 /*.deb
 /*.buildinfo
 /*.changes
+
+# Documentation site (mkdocs build) and its local Python environment
+/site/
+/.venv/

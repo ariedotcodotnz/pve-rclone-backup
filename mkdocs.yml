@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Documentation site, built with MkDocs and Material for MkDocs
+# (docs/requirements.txt) and published to GitHub Pages by
+# .github/workflows/docs.yml. Pages under docs/reference/ are partly
+# generated: run `make docs` after changing the CLI or schema/*.yaml.
+
+site_name: pve-rclone-backup
+site_description: Offsite replication of Proxmox VE backups through rclone
+site_url: https://ariedotcodotnz.github.io/pve-rclone-backup/
+repo_url: https://github.com/ariedotcodotnz/pve-rclone-backup
+repo_name: ariedotcodotnz/pve-rclone-backup
+edit_uri: edit/master/docs/
+copyright: Licensed under the GNU AGPL v3.0 or later
+
+strict: true
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - content.action.edit
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Requirements: getting-started/requirements.md
+      - Installation: getting-started/installation.md
+      - Quick start: getting-started/quick-start.md
+  - User guide:
+      - How it works: guide/how-it-works.md
+      - Remotes: guide/remotes.md
+      - Storages: guide/storages.md
+      - Encryption and recovery kits: guide/recovery-kit.md
+      - Replication and the queue: guide/replication.md
+      - Offsite backups: guide/backups.md
+      - Restoring: guide/restore.md
+      - Verification: guide/verification.md
+      - Retention and deletion: guide/retention.md
+      - Proxmox VE integration: guide/proxmox-ve.md
+      - Terminal interface: guide/tui.md
+      - Monitoring: guide/monitoring.md
+      - Clusters: guide/clusters.md
+      - Troubleshooting: guide/troubleshooting.md
+  - Disaster recovery:
+      - Recovery runbook: dr-runbook.md
+      - Manual recovery with rclone: manual-recovery.md
+  - Reference:
+      - Command line:
+          - reference/cli/index.md
+          - backup: reference/cli/backup.md
+          - completion: reference/cli/completion.md
+          - config: reference/cli/config.md
+          - doctor: reference/cli/doctor.md
+          - hook: reference/cli/hook.md
+          - queue: reference/cli/queue.md
+          - recover: reference/cli/recover.md
+          - recovery-kit: reference/cli/recovery-kit.md
+          - remote: reference/cli/remote.md
+          - restore: reference/cli/restore.md
+          - retention: reference/cli/retention.md
+          - status: reference/cli/status.md
+          - storage: reference/cli/storage.md
+          - tui: reference/cli/tui.md
+          - verify: reference/cli/verify.md
+          - version: reference/cli/version.md
+      - Storage properties: reference/storage-properties.md
+      - Node settings: reference/node-settings.md
+      - Daemon settings: reference/daemon-settings.md
+      - Files and paths: reference/files.md
+      - Security model: reference/security.md
+  - Development:
+      - development/index.md
+      - Architecture decisions:
+          - Architecture: adr/0001-architecture.md
+          - Transport: adr/0002-transport.md
+      - Spikes:
+          - PVE plugin: spikes/pve-plugin.md
+          - vzdump events: spikes/vzdump-events.md

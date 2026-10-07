@@ -3,6 +3,8 @@
 Offsite replication of Proxmox VE backups to rclone-supported cloud storage.
 Microsoft OneDrive Personal is the first target.
 
+**Documentation: <https://ariedotcodotnz.github.io/pve-rclone-backup/>**
+
 > **Status: pre-alpha, under active development.** Replication, verification, retention, fetch and
 > restore work through the CLI and the TUI, and `make deb` builds an installable package. It passes
 > an end-to-end suite on a nested Proxmox VE 9.2 node (`make e2e`). It has not yet been tested
@@ -62,6 +64,9 @@ These commands run as root on a PVE node with the daemon running.
 `pve-rclone-backup tui` offers the same in an interactive terminal interface, and
 `pve-rclone-backup doctor` checks the installation. Every command accepts `-o json`.
 
+The [documentation](https://ariedotcodotnz.github.io/pve-rclone-backup/) covers installation, the
+user guide, and a reference of every command and setting. Its sources are in [`docs/`](docs/).
+
 ## Building
 
 You need Go 1.26 or newer; the package and Perl tests also need Docker.
@@ -84,6 +89,9 @@ only Docker and hardware virtualisation. The first run builds a cached base imag
 
 Recovering without the original host is described in [docs/dr-runbook.md](docs/dr-runbook.md), and
 recovering with stock rclone only in [docs/manual-recovery.md](docs/manual-recovery.md).
+
+`make docs` regenerates the reference pages from the command tree and `schema/*.yaml`; see
+[Development](docs/development/index.md) to preview the site.
 
 ## License
 
