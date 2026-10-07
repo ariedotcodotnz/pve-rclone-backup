@@ -18,6 +18,10 @@ jobs:
           go-version: "1.26.x"
       - name: gofmt
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: Generated code and reference pages are up to date
+        run: |
+          go run ./cmd/schemagen -root . -check
+          go run ./cmd/docgen -root . -check
       - name: go vet
         run: make vet
       - uses: golangci/golangci-lint-action@v9
