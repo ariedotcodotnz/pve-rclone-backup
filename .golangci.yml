@@ -30,7 +30,7 @@ linters:
     rules:
       # Build-time tools read and write repository files (and directories)
       # by design, with the usual repository permissions.
-      - path: cmd/schemagen/
+      - path: cmd/(schemagen|docgen)/
         linters: [gosec]
         text: "G301|G304|G306"
       # The store only concatenates "?" placeholder lists; values are always bound.

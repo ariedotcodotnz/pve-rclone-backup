@@ -8,6 +8,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 dpkg-deb --info "$deb" | grep -q 'Package: pve-rclone-backup' || fail "control"
 # Slim images exclude /usr/share/doc from installation: check the archive.
 dpkg-deb --contents "$deb" | grep './usr/share/doc/pve-rclone-backup/dr-runbook.md' >/dev/null || fail "runbook not packaged"
+for page in pve-rclone-backup pve-rclone-backup-restore; do
+    dpkg-deb --contents "$deb" | grep "./usr/share/man/man1/$page.1.gz" >/dev/null || fail "manual page $page not packaged"
+done
 # Dependencies available in this container must be satisfied.
 dpkg -i "$deb" >/tmp/install.log 2>&1 || {
     cat /tmp/install.log; fail "install"

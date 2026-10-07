@@ -117,6 +117,9 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	return code
 }
 
+// Command returns the command tree, for generating documentation.
+func (a *App) Command() *cobra.Command { return a.rootCommand() }
+
 func (a *App) rootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "pve-rclone-backup",

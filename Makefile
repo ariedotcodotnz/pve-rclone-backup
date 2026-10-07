@@ -11,7 +11,7 @@ export CGO_ENABLED ?= 0
 
 BINARIES := pve-rclone-backupd pve-rclone-backup
 
-.PHONY: all build generate test race integration perl-test deb deb-test e2e lint fmt vet clean
+.PHONY: all build generate docs test race integration perl-test deb deb-test e2e lint fmt vet clean
 
 all: build
 
@@ -25,6 +25,10 @@ FORCE:
 # Regenerate configuration code and reference pages from schema/*.yaml.
 generate:
 	$(GO) run ./cmd/schemagen -root .
+
+# Regenerate the reference pages of the documentation (docs/reference).
+docs: generate
+	$(GO) run ./cmd/docgen -root .
 
 test:
 	$(GO) test ./...
@@ -48,8 +52,11 @@ DEB_VERSION ?= 0.1.0~dev.$(shell date -u +%Y%m%d).g$(shell git rev-parse --short
 DEB_ARCH    ?= amd64
 
 # Static binaries, so the package depends on nothing but PVE and the tools it runs.
+# Manual pages are dated by the last commit, for reproducible packages.
 deb:
 	CGO_ENABLED=0 GOARCH=$(DEB_ARCH) $(MAKE) build VERSION=$(DEB_VERSION)
+	rm -rf $(BINDIR)/man
+	SOURCE_DATE_EPOCH=$$(git log -1 --format=%ct 2>/dev/null || echo 0) $(GO) run ./cmd/docgen -man $(BINDIR)/man
 	packaging/build-deb.sh $(DEB_VERSION) $(DEB_ARCH) $(BINDIR) dist
 
 # Install, use and purge the package in the PVE test container.
@@ -77,6 +84,7 @@ vet:
 
 lint: vet
 	$(GO) run ./cmd/schemagen -root . -check
+	$(GO) run ./cmd/docgen -root . -check
 	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./...; \
