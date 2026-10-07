@@ -225,7 +225,7 @@ func Run(ctx context.Context, opts Options) error {
 	restorer := restore.New(restore.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Repos: d.storages.Repo,
 		StagingDir: ncfg.StagingDir, StagingReserve: ncfg.StagingReserve,
-		Tools: d.restoreTools(ncfg), OnDamaged: d.contentDamaged,
+		Tools: d.restoreTools(ncfg), OnDamaged: d.contentDamaged, OnVerified: d.contentResolved,
 	})
 	restorer.CleanStaging()
 	for kind, sched := range map[string]**jobs.Scheduler{"fetch": &d.fetches, "restore": &d.restores, "verify": &d.verifies} {
@@ -241,6 +241,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.deletes = jobs.New(jobs.Options{
 		Log: d.log, Store: st, Node: opts.Node, Kind: "delete", Workers: 1, Targets: d.storages.Targets,
 		Runner: &retention.Deleter{Log: d.log, Store: st, Repos: d.storages.Repo, Lock: d.lockBackup, OnRemoved: func(storeID, volname string) {
+			d.contentResolved(storeID, volname)
 			d.api.Events().Publish("backup.removed", map[string]string{"storage": storeID, "volname": volname})
 		}},
 		Ready: func(id string) error {

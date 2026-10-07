@@ -33,11 +33,23 @@ func (d *Daemon) damagedAlert(ctx context.Context, storeID string, rep *catalog.
 	}
 }
 
+// contentAlertID names the alert of a backup whose content failed
+// verification.
+func contentAlertID(storeID, volname string) string { return "damaged:" + storeID + ":" + volname }
+
 func (d *Daemon) contentDamaged(storeID, volname, problem string) {
-	id := "damaged:" + storeID + ":" + volname
+	id := contentAlertID(storeID, volname)
 	msg := fmt.Sprintf("Content verification of %s:%s failed: %s", storeID, volname, problem)
 	if err := d.store.RaiseAlert(context.Background(), store.Alert{ID: id, Severity: "error", StoreID: storeID, Message: msg}); err != nil {
 		d.log.Warn("raise alert", "alert", id, "err", err)
+	}
+}
+
+// contentResolved clears a backup's content alert: it verified fine again,
+// or it was deleted.
+func (d *Daemon) contentResolved(storeID, volname string) {
+	if err := d.store.ClearAlert(context.Background(), contentAlertID(storeID, volname)); err != nil {
+		d.log.Warn("clear alert", "alert", contentAlertID(storeID, volname), "err", err)
 	}
 }
 

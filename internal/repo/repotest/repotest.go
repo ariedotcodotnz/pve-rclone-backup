@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/rclone/rclone/backend/crypt"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/obscure"
+	"github.com/rclone/rclone/lib/encoder"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
@@ -251,8 +253,9 @@ func Write(t testing.TB, r *repo.Repo, b Backup) *manifest.Manifest {
 
 // CorruptStored flips a byte of the stored (encrypted) object behind
 // remote, a path below generation gen's crypt root, on the local directory
-// dir that Remote returned.
-func CorruptStored(t testing.TB, r *repo.Repo, dir string, gen int, remote string) {
+// dir that Remote returned. The returned function puts the original bytes
+// back.
+func CorruptStored(t testing.TB, r *repo.Repo, dir string, gen int, remote string) (repair func()) {
 	t.Helper()
 	g, err := r.Keys.Generation(gen)
 	if err != nil {
@@ -266,13 +269,22 @@ func CorruptStored(t testing.TB, r *repo.Repo, dir string, gen int, remote strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, r.Loc.Path, transport.CryptRoot(gen), c.EncryptFileName(remote))
+	// The local backend stores some characters of encrypted names (the
+	// control picture symbols) as the control characters they stand for.
+	path := filepath.Join(dir, r.Loc.Path, transport.CryptRoot(gen), encoder.OS.FromStandardPath(c.EncryptFileName(remote)))
 	data, err := os.ReadFile(path) //nolint:gosec // test fixture below t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
+	orig := slices.Clone(data)
 	data[len(data)/2] ^= 0x40                               // inside the first encrypted block, past the header
 	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		if err := os.WriteFile(path, orig, 0o600); err != nil { //nolint:gosec // test fixture
+			t.Fatal(err)
+		}
 	}
 }

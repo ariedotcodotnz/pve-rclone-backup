@@ -89,7 +89,9 @@ func (r *Runner) verify(ctx context.Context, t *jobs.Task, s *source, p VerifyPa
 	if runErr != nil {
 		det.Error = runErr.Error()
 		result = "failed"
-		damaged = errors.Is(runErr, transport.ErrIntegrity)
+		// A digest mismatch, and also stored ciphertext that no longer
+		// decrypts or authenticates, is damage of the offsite copy.
+		damaged = transport.Classify(runErr) == transport.ClassIntegrity
 		if damaged {
 			result = "damaged"
 		}
@@ -110,6 +112,9 @@ func (r *Runner) verify(ctx context.Context, t *jobs.Task, s *source, p VerifyPa
 			return err
 		}
 		r.log.Info("offsite backup verified", "storage", s.b.StoreID, "volname", s.b.Volname, "level", p.Level, "structure", det.Structural)
+		if r.opts.OnVerified != nil {
+			r.opts.OnVerified(s.b.StoreID, s.b.Volname)
+		}
 	}
 	if runErr != nil {
 		return jobs.Permanent(runErr)

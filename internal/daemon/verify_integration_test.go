@@ -7,6 +7,7 @@ package daemon
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +115,68 @@ func TestVerificationEndpoints(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("damage alert not cleared: %+v", st.Alerts)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestContentDamageAlertIsCleared: the alert of a backup whose content
+// failed verification goes away when it verifies fine again or is deleted.
+func TestContentDamageAlertIsCleared(t *testing.T) {
+	ctx := t.Context()
+	r, dir := repotest.Init(t)
+	b := repotest.Backup{VMID: 100, Size: 100 << 10, SegmentSize: 32 << 10}
+	repotest.Write(t, r, b)
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	writeStorageCfg(t, e, localSection+strings.TrimSuffix(offsiteSection("offsite", r.Loc.Remote, "homelab"), "\n")+
+		"\trclone-delete-grace 0\n\n")
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	waitStorage(t, c, "offsite", resynced)
+	name := strings.TrimPrefix(b.ID().Volname("vma.zst"), "backup/")
+	path := "/v1/storages/offsite/backups/" + name
+	alertID := "damaged:offsite:backup/" + name
+	alerted := func() bool {
+		st, err := c.Status(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(st.Alerts, func(a apiv1.Alert) bool { return a.ID == alertID })
+	}
+	verify := func() apiv1.Job {
+		var j apiv1.Job
+		if err := c.Do(ctx, http.MethodPost, path+"/verify", apiv1.VerifyRequest{Level: 3}, &j); err != nil {
+			t.Fatal(err)
+		}
+		return waitJob(t, c, j.ID)
+	}
+
+	repair := repotest.CorruptStored(t, r, dir, 1, b.ID().Path(layout.PartName(1)))
+	if j := verify(); j.State != "failed" || !alerted() {
+		t.Fatalf("content damage: job %+v, alert raised %v", j, alerted())
+	}
+	repair()
+	if j := verify(); j.State != "complete" || alerted() {
+		t.Fatalf("after repair: job %+v, alert still raised %v", j, alerted())
+	}
+
+	repotest.CorruptStored(t, r, dir, 1, b.ID().Path(layout.PartName(1)))
+	if j := verify(); j.State != "failed" || !alerted() {
+		t.Fatalf("content damage again: job %+v", j)
+	}
+	if err := c.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// With no grace period, a retention run queues the deletion at once.
+	if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/retention", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for alerted() {
+		if time.Now().After(deadline) {
+			t.Fatal("alert of a deleted backup not cleared")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

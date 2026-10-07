@@ -52,7 +52,10 @@ type Options struct {
 	// OnDamaged is called when a content verification finds a backup
 	// damaged.
 	OnDamaged func(storeID, volname, problem string)
-	Now       func() time.Time
+	// OnVerified is called when a content verification or restore test of
+	// a backup succeeds.
+	OnVerified func(storeID, volname string)
+	Now        func() time.Time
 }
 
 // Runner implements jobs.Runner for fetch and restore jobs.
