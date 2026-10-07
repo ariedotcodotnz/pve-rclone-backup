@@ -22,7 +22,7 @@ $(BINDIR)/%: FORCE
 
 FORCE:
 
-# Regenerate configuration code from schema/*.yaml.
+# Regenerate configuration code and reference pages from schema/*.yaml.
 generate:
 	$(GO) run ./cmd/schemagen -root .
 

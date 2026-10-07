@@ -53,14 +53,17 @@ type job struct {
 	goFile  string // output Go file
 	json    string // output JSON Schema
 	perl    string // output Perl module (storage only)
+	doc     string // output reference page of the documentation
 	storage bool
 }
 
 var jobs = []job{
 	{schema: "storage", goFile: "internal/config/storage_gen.go", json: "internal/config/storage.schema.json",
-		perl: "perl/PVE/Storage/Custom/RcloneBackup/Schema.pm", storage: true},
-	{schema: "node", goFile: "internal/config/node_gen.go", json: "internal/config/node.schema.json"},
-	{schema: "daemon", goFile: "internal/config/daemon_gen.go", json: "internal/config/daemon.schema.json"},
+		perl: "perl/PVE/Storage/Custom/RcloneBackup/Schema.pm", doc: "docs/reference/storage-properties.md", storage: true},
+	{schema: "node", goFile: "internal/config/node_gen.go", json: "internal/config/node.schema.json",
+		doc: "docs/reference/node-settings.md"},
+	{schema: "daemon", goFile: "internal/config/daemon_gen.go", json: "internal/config/daemon.schema.json",
+		doc: "docs/reference/daemon-settings.md"},
 }
 
 func main() {
@@ -84,6 +87,10 @@ func main() {
 					stale = true
 				}
 				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				fmt.Fprintf(os.Stderr, "schemagen: %v\n", err)
+				os.Exit(1)
 			}
 			if err := os.WriteFile(full, content, 0o644); err != nil {
 				fmt.Fprintf(os.Stderr, "schemagen: %v\n", err)
@@ -121,6 +128,11 @@ func generate(root string, j job) (map[string][]byte, error) {
 	if j.perl != "" {
 		out[j.perl] = genPerl(&s, j)
 	}
+	doc, err := genDoc(&s, j)
+	if err != nil {
+		return nil, err
+	}
+	out[j.doc] = doc
 	return out, nil
 }
 

@@ -28,10 +28,11 @@ linters:
           disabled: true
   exclusions:
     rules:
-      # Build-time tools read and write repository files by design.
+      # Build-time tools read and write repository files (and directories)
+      # by design, with the usual repository permissions.
       - path: cmd/schemagen/
         linters: [gosec]
-        text: "G304|G306"
+        text: "G301|G304|G306"
       # The store only concatenates "?" placeholder lists; values are always bound.
       - path: internal/store/
         linters: [gosec]

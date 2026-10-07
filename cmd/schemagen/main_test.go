@@ -62,3 +62,31 @@ func TestPerlQuote(t *testing.T) {
 		t.Fatalf("perlQuote = %s", got)
 	}
 }
+
+func TestDocRequiresBaseOptionDescriptions(t *testing.T) {
+	s := &schemaFile{GoType: "Storage", StorageType: "rclone-backup", BaseOptions: []string{"content", "new-pve-option"}}
+	if _, err := genDoc(s, job{schema: "storage", storage: true}); err == nil || !strings.Contains(err.Error(), "new-pve-option") {
+		t.Fatalf("undocumented base option accepted: %v", err)
+	}
+}
+
+func TestDocDescribesValues(t *testing.T) {
+	minimum := int64(64 << 20)
+	for _, c := range []struct {
+		p    property
+		want string
+	}{
+		{property{Type: "size", Minimum: &minimum}, "of at least `64M`"},
+		{property{Type: "duration", AllowOff: true}, "or `off`"},
+		{property{Type: "enum", Values: []string{"crypt", "none"}}, "one of `crypt`, `none`."},
+		{property{Type: "list", Element: "vmid"}, "guest IDs"},
+		{property{Type: "string", Pattern: "[a-z]+", MaxLength: 8}, "`[a-z]+`, at most 8 characters"},
+	} {
+		if got := docType(c.p); !strings.Contains(got, c.want) {
+			t.Errorf("docType(%+v) = %q, want it to contain %q", c.p, got, c.want)
+		}
+	}
+	if got := humanSize(1536 << 20); got != "1536M" {
+		t.Errorf("humanSize = %s", got)
+	}
+}
