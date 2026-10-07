@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -211,15 +212,8 @@ func (d *Daemon) queueDueDeletions(ctx context.Context) {
 		return
 	}
 	for _, b := range due {
-		d.queueDeletion(ctx, b.StoreID, b.Volname, b.RemoteDir, cmpOr(b.TombstoneReason, "user"))
+		d.queueDeletion(ctx, b.StoreID, b.Volname, b.RemoteDir, cmp.Or(b.TombstoneReason, "user"))
 	}
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func (d *Daemon) queueDeletion(ctx context.Context, storeID, volname, remoteDir, reason string) {

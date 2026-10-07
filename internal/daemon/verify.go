@@ -76,7 +76,7 @@ func (d *Daemon) verifyRoutes() {
 				return api.Invalid("invalid scratch storage %q", req.ScratchStorage)
 			}
 		default:
-			return api.Invalid("verification level must be 2, 3 or 4")
+			return api.Invalid("verification level must be 1, 2, 3 or 4")
 		}
 		size := b.ArchiveSize
 		j, err := d.queueJob(r, d.verifies, &store.Job{Kind: "verify", StoreID: b.StoreID, BackupVolname: b.Volname,

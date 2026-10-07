@@ -10,6 +10,7 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
+	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -177,6 +178,7 @@ func (r *Runner) quietPipeline(ctx context.Context, src io.Reader, compression s
 	if d != nil {
 		dec = exec.CommandContext(ctx, d[0], d[1:]...) //nolint:gosec // fixed decompressor commands
 		dec.Stdin = fed
+		dec.WaitDelay = 30 * time.Second
 		pipe, err := dec.StdoutPipe()
 		if err != nil {
 			return err
@@ -188,6 +190,7 @@ func (r *Runner) quietPipeline(ctx context.Context, src io.Reader, compression s
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed tool names
 	cmd.Stdin = in
+	cmd.WaitDelay = 30 * time.Second
 	errText := new(stringsBuilder)
 	cmd.Stderr = &limitWriter{w: errText, n: 4096}
 	runErr := cmd.Run()
