@@ -190,7 +190,7 @@ func (m *Model) exportKit(ctx context.Context, req apiv1.KitExportRequest, file 
 		intro += "\n\nThe kit is not passphrase-protected: keep the file secret."
 	}
 	c := m.c
-	f := newForm("Confirm the recovery kit", intro, []*field{newField("checksum", "Type the checksum to confirm the kit is stored safely", "", true, false)},
+	f := newForm("Confirm the recovery kit", intro, []*field{newField("checksum", "Once the kit is stored, type its checksum (shown above) to confirm", "", true, false)},
 		func(v map[string]string) (tea.Cmd, string) {
 			if !strings.EqualFold(v["checksum"], kit.Checksum) {
 				return nil, "the checksum does not match; check the kit file"

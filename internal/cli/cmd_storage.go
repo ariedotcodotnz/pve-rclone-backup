@@ -208,6 +208,17 @@ deleted or pruned.`,
 	return cmd
 }
 
+// checksumShape shows the form of a checksum, not its value: typing it
+// back is the confirmation.
+func checksumShape(sum string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '-' {
+			return r
+		}
+		return 'x'
+	}, sum)
+}
+
 // exportAndConfirm exports a kit to a file and confirms it by checksum.
 func (a *App) exportAndConfirm(ctx context.Context, targets []apiv1.KitTarget, kf kitFlags) error {
 	pass := ""
@@ -247,12 +258,13 @@ func (a *App) exportAndConfirm(ctx context.Context, targets []apiv1.KitTarget, k
 	if !kit.Encrypted {
 		fmt.Fprintln(a.Out, "The kit is not passphrase-protected: keep the file secret.")
 	}
+	fmt.Fprintln(a.Out, "Copy the file off this host (for example with scp); do not paste its contents into a terminal or a chat.")
 	sum := kf.confirm
 	if sum == "" {
 		if !a.Interactive {
 			return usagef("confirm the kit with --confirm-checksum %s once it is stored safely", kit.Checksum)
 		}
-		if sum, err = a.prompt("\nType the checksum to confirm the kit is stored safely: "); err != nil {
+		if sum, err = a.prompt(fmt.Sprintf("\nOnce the kit is stored, type its checksum (%s) to confirm: ", checksumShape(kit.Checksum))); err != nil {
 			return err
 		}
 	}
