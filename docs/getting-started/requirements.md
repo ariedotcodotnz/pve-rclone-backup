@@ -17,7 +17,7 @@ It opens no network ports. See the [security model](../reference/security.md).
 ## Proxmox VE
 
 - **Proxmox VE 9.0 or newer**, on amd64. The storage plugin supports storage plugin API versions
-  12 to 15 (Proxmox VE 9.0 to 9.2).
+  12 to 16 (Proxmox VE 9.0 to 9.2).
 - A **local backup storage** that your backup jobs write to, such as `local` or an NFS or CIFS
   share. pve-rclone-backup replicates the archives that appear there; it never writes backups
   itself.

@@ -26,7 +26,7 @@ use base qw(PVE::Storage::Plugin);
 
 # Storage plugin API range this plugin is tested against.
 use constant APIVER_MIN => 12; # Proxmox VE 9.0
-use constant APIVER_MAX => 15; # Proxmox VE 9.2
+use constant APIVER_MAX => 16; # Proxmox VE 9.2 (libpve-storage-perl 9.1.12)
 
 # Matches the original vzdump archive name, optionally with a collision
 # suffix (".N") before the extension.

@@ -35,7 +35,7 @@ from the daemon's catalogue, so the GUI stays fast even when the cloud is slow o
 
 ## Version compatibility
 
-The plugin supports the storage plugin API of Proxmox VE 9.0 to 9.2 (API versions 12 to 15). On a
+The plugin supports the storage plugin API of Proxmox VE 9.0 to 9.2 (API versions 12 to 16). On a
 newer Proxmox VE, it reports the newest version it was tested with. Proxmox VE then logs a warning
 and keeps using the plugin for as long as it supports that API version.
 
