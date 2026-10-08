@@ -20,7 +20,7 @@ pve-rclone-backup storage init offsite --remote onedrive-main --source homelab \
 |---|---|
 | `--remote` | The [remote](remotes.md) to use. Required. |
 | `--source` | The name of this installation inside the repository: lowercase letters, digits and `-`, up to 32 characters. Your cluster's name is a good choice. Required. |
-| `--path` | The repository folder in the remote. Default: `pve-backups`. |
+| `--path` | The repository folder in the remote, such as `proxmox` or `Backups/Proxmox`. Folder names may contain spaces (quote them: `--path 'Drive 1'`), but not at the start or end. The folder is created if needed and may already hold other files. Default: `pve-backups`. |
 | `--replicate-from` | The local backup storages to replicate, separated by commas. Without it, the storage replicates nothing until you set [`rclone-replicate-from`](../reference/storage-properties.md#rclone-replicate-from). |
 | `--encryption` | `crypt` (default) or `none`. |
 

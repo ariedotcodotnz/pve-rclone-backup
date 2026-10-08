@@ -109,9 +109,9 @@ my $properties = {
     },
     'rclone-path' => {
         title => 'Repository Path',
-        description => 'Repository base path inside the remote.',
+        description => 'Repository base path inside the remote: folder names separated by "/", of letters, digits, spaces, ".", "_" and "-", each starting with a letter or digit and not ending with a space.',
         type => 'string',
-        pattern => '(?:[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*)',
+        pattern => '(?:[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?(?:/[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?)*)',
         maxLength => 128,
         default => 'pve-backups',
     },

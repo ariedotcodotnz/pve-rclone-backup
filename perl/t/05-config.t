@@ -25,6 +25,7 @@ is_deeply(\@warnings, [], 'fixture parses without warnings');
 my $scfg = $cfg->{ids}->{offsite};
 is($scfg->{type}, 'rclone-backup', 'type');
 is($scfg->{'rclone-remote'}, 'onedrive-main', 'remote');
+is($scfg->{'rclone-path'}, 'Drive 1/PVE backups', 'path with spaces');
 is($scfg->{'rclone-source'}, 'homelab', 'source');
 is($scfg->{'rclone-tags'}, 'offsite;critical', 'tag list');
 is_deeply($scfg->{content}, { backup => 1 }, 'content');

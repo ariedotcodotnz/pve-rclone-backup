@@ -9,7 +9,7 @@ import (
 )
 
 var reRcloneRemote = regexp.MustCompile("^(?:[a-z][a-z0-9_-]{0,62})$")
-var reRclonePath = regexp.MustCompile("^(?:[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*)$")
+var reRclonePath = regexp.MustCompile("^(?:[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?(?:/[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?)*)$")
 var reRcloneSource = regexp.MustCompile("^(?:[a-z0-9][a-z0-9-]{0,31})$")
 
 // Storage holds the settings of a rclone-backup storage.
@@ -19,7 +19,7 @@ type Storage struct {
 
 	// Remote (rclone-remote): Name of the transport remote configured with 'pve-rclone-backup remote add'.
 	Remote string
-	// Path (rclone-path): Repository base path inside the remote.
+	// Path (rclone-path): Repository base path inside the remote: folder names separated by "/", of letters, digits, spaces, ".", "_" and "-", each starting with a letter or digit and not ending with a space.
 	Path string
 	// Encryption (rclone-encryption): Client-side encryption of the repository (rclone crypt).
 	Encryption string

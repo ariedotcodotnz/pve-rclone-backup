@@ -32,7 +32,9 @@ import (
 
 var (
 	remoteNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
-	repoPathRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
+	// Folder names may contain spaces, but not at either end: OneDrive's
+	// name encoding would change them there.
+	repoPathRe = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?(?:/[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?)*$`)
 )
 
 // RemoteType returns the rclone backend type of a configured remote.

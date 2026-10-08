@@ -35,7 +35,7 @@ func TestParsePVEFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(s.ReplicateFrom, []string{"local"}) || !slices.Equal(s.ExcludeVMIDs, []int{105, 106}) {
+	if !slices.Equal(s.ReplicateFrom, []string{"local"}) || !slices.Equal(s.ExcludeVMIDs, []int{105, 106}) || s.Path != "Drive 1/PVE backups" {
 		t.Fatalf("decoded = %+v", s)
 	}
 	if len(cfg.OfType(config.StorageType)) != 1 {

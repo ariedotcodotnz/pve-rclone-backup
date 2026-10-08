@@ -42,8 +42,10 @@ properties:
     field: Path
     type: string
     title: Repository Path
-    description: Repository base path inside the remote.
-    pattern: '[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*'
+    description: >-
+      Repository base path inside the remote: folder names separated by "/", of letters, digits,
+      spaces, ".", "_" and "-", each starting with a letter or digit and not ending with a space.
+    pattern: '[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?(?:/[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?)*'
     max_length: 128
     default: pve-backups
     option: fixed-optional

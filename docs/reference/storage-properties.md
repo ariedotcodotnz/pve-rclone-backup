@@ -11,7 +11,7 @@ Properties of `rclone-backup` storages in `/etc/pve/storage.cfg`. `pve-rclone-ba
 | Property | Default | Description |
 |---|---|---|
 | [`rclone-remote`](#rclone-remote) | none | Name of the transport remote configured with 'pve-rclone-backup remote add'. |
-| [`rclone-path`](#rclone-path) | `pve-backups` | Repository base path inside the remote. |
+| [`rclone-path`](#rclone-path) | `pve-backups` | Repository base path inside the remote: folder names separated by "/", of letters, digits, spaces, ".", "_" and "-", each starting with a letter or digit and not ending with a space. |
 | [`rclone-encryption`](#rclone-encryption) | `crypt` | Client-side encryption of the repository (rclone crypt). |
 | [`rclone-source`](#rclone-source) | none | Namespace of this Proxmox VE installation inside the repository. |
 | [`rclone-replicate-from`](#rclone-replicate-from) | none | Local backup storages whose finished archives are replicated. Empty disables replication. |
@@ -44,9 +44,9 @@ Properties of `rclone-backup` storages in `/etc/pve/storage.cfg`. `pve-rclone-ba
 
 ## `rclone-path`
 
-**Repository Path.** Repository base path inside the remote.
+**Repository Path.** Repository base path inside the remote: folder names separated by "/", of letters, digits, spaces, ".", "_" and "-", each starting with a letter or digit and not ending with a space.
 
-- Value: text matching the regular expression `[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*`, at most 128 characters.
+- Value: text matching the regular expression `[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?(?:/[A-Za-z0-9](?:[A-Za-z0-9._ -]*[A-Za-z0-9._-])?)*`, at most 128 characters.
 - Default: `pve-backups`
 - Set when the storage is created; it cannot be changed afterwards.
 
