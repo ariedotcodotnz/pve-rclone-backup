@@ -348,6 +348,10 @@ func (m *Manager) Answer(ctx context.Context, id string, a apiv1.RemoteSetupAnsw
 	})
 }
 
+// maxSteps bounds the steps without a question that rclone may take in a
+// row, against a backend that never asks again.
+const maxSteps = 10
+
 // step runs one step of rclone's configuration in the background and
 // waits briefly for it; OAuth steps keep running until the redirect is
 // relayed.
@@ -359,6 +363,18 @@ func (m *Manager) step(s *session, fn func(context.Context) (*fs.ConfigOut, erro
 	m.mu.Unlock()
 	go func() {
 		out, err := fn(s.ctx)
+		// A step without a question moves rclone on to another state,
+		// usually back to a question after an answer it could not use.
+		// Continue like rclone's own prompt does, and show the error with
+		// the next question.
+		for i := 0; err == nil && out != nil && out.State != "" && out.Option == nil && i < maxSteps; i++ {
+			msg := out.Error
+			out, err = config.UpdateRemote(s.ctx, s.name, maps.Clone(ephemeral),
+				config.UpdateRemoteOpt{NonInteractive: true, Continue: true, State: out.State, Result: out.Result, Obscure: true})
+			if err == nil && out != nil && out.Error == "" {
+				out.Error = msg
+			}
+		}
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		defer close(done)

@@ -237,6 +237,9 @@ func (a *App) runSetup(ctx context.Context, s apiv1.RemoteSetup, answers map[str
 			s = next
 		case apiv1.SetupQuestion:
 			if s.Option == nil {
+				if s.Error != "" {
+					return fmt.Errorf("setting up %s failed: %s", s.Name, s.Error)
+				}
 				return fmt.Errorf("setup of %s stopped without a question", s.Name)
 			}
 			ans, err := a.answer(s, answers, auth)

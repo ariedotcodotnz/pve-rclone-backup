@@ -5,6 +5,7 @@
 package remotes
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
+	"github.com/rclone/rclone/fs/config/configmap"
 	"golang.org/x/sys/unix"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
@@ -214,6 +217,55 @@ func TestReconnectWithoutQuestions(t *testing.T) {
 	if !config.LoadedData().HasSection(loc.Remote) {
 		t.Fatal("reconnected remote removed")
 	}
+}
+
+// The colourtest backend asks for a colour and, like OneDrive's drive check, sends
+// a refused answer back to the question with an error and no question of
+// its own.
+func init() {
+	fs.Register(&fs.RegInfo{
+		Name: "colourtest",
+		NewFs: func(context.Context, string, string, configmap.Mapper) (fs.Fs, error) {
+			return nil, errors.New("not a real backend")
+		},
+		Config: func(_ context.Context, _ string, _ configmap.Mapper, in fs.ConfigIn) (*fs.ConfigOut, error) {
+			switch in.State {
+			case "", "ask":
+				return fs.ConfigInput("check", "colour", "Favourite colour?")
+			case "check":
+				if in.Result != "blue" {
+					return fs.ConfigError("ask", "only blue works")
+				}
+				return nil, nil
+			}
+			return nil, fmt.Errorf("unknown state %q", in.State)
+		},
+	})
+}
+
+func TestRefusedAnswerIsAskedAgain(t *testing.T) {
+	m := newManager(nil)
+	config.LoadedData().SetValue("colours", "type", "colourtest")
+	t.Cleanup(func() { config.LoadedData().DeleteSection("colours") })
+	s, err := m.Start(t.Context(), apiv1.RemoteSetupRequest{Name: "colours"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status != apiv1.SetupQuestion || s.Option == nil || s.Option.Name != "colour" {
+		t.Fatalf("first step = %+v", s)
+	}
+	s, err = m.Answer(t.Context(), s.ID, apiv1.RemoteSetupAnswer{State: s.State, Result: "red"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status != apiv1.SetupQuestion || s.Option == nil || s.Option.Name != "colour" || s.Error != "only blue works" {
+		t.Fatalf("after a refused answer = %+v", s)
+	}
+	s, err = m.Answer(t.Context(), s.ID, apiv1.RemoteSetupAnswer{State: s.State, Result: "blue"})
+	if err != nil || s.Status != apiv1.SetupDone {
+		t.Fatalf("after a good answer = %+v, %v", s, err)
+	}
+	_ = m.Finish(s.ID)
 }
 
 func TestListDeleteTest(t *testing.T) {
