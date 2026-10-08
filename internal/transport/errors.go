@@ -72,6 +72,20 @@ func RetryAfter(err error) (time.Duration, bool) {
 	return pacer.IsRetryAfter(err)
 }
 
+// staleDirCache reports whether err is a provider's "not found" answer to a
+// request made with a cached item ID. rclone remembers the IDs of the
+// directories it has used, and a directory deleted or recreated by someone
+// else, for example in the provider's web interface, leaves such an entry
+// behind. Items that do not exist when looked up by path are reported with
+// rclone's own not-found errors instead.
+func staleDirCache(err error) bool {
+	if err == nil || errors.Is(err, fs.ErrorObjectNotFound) || errors.Is(err, fs.ErrorDirNotFound) {
+		return false
+	}
+	ae, ok := errors.AsType[*onedriveapi.Error](err)
+	return ok && ae.ErrorInfo.Code == "itemNotFound"
+}
+
 // Classify maps an error from rclone or this package to a Class.
 func Classify(err error) Class {
 	if err == nil {
@@ -106,6 +120,8 @@ func Classify(err error) Class {
 	if ae, ok := errors.AsType[*onedriveapi.Error](err); ok {
 		code := ae.ErrorInfo.Code + " " + ae.ErrorInfo.InnerError.Code
 		switch {
+		case ae.ErrorInfo.Code == "itemNotFound":
+			return ClassNotFound
 		case containsAny(code, quotaCodes):
 			return ClassQuota
 		case containsAny(code, authCodes):

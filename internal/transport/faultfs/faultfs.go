@@ -40,9 +40,31 @@ type Controller struct {
 	// VanishAfterList deletes matching objects right after they are
 	// listed (still returning them), as a concurrent deletion would.
 	VanishAfterList func(remote string) bool
+	// ListError is called before each listing with the attempt number for
+	// that directory (starting at 1); a non-nil error fails the listing.
+	ListError func(dir string, attempt int) error
 
-	mu   sync.Mutex
-	puts map[string]int
+	mu      sync.Mutex
+	puts    map[string]int
+	lists   map[string]int
+	flushes int
+}
+
+// Flushes returns how often the directory cache was flushed.
+func (c *Controller) Flushes() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.flushes
+}
+
+func (c *Controller) nextList(dir string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lists == nil {
+		c.lists = map[string]int{}
+	}
+	c.lists[dir]++
+	return c.lists[dir]
 }
 
 // Puts returns how often an upload of remote was attempted.
@@ -115,7 +137,19 @@ func newFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	}
 	f := &Fs{name: name, root: root, wrapped: wrapped, ctl: v.(*Controller)}
 	f.features = (&fs.Features{CanHaveEmptyDirectories: true}).Fill(ctx, f).Mask(ctx, wrapped).WrapsFs(f, wrapped)
+	// Like the backends that cache directory IDs, even over one that does not.
+	f.features.DirCacheFlush = f.DirCacheFlush
 	return f, err
+}
+
+// DirCacheFlush records the flush and passes it on.
+func (f *Fs) DirCacheFlush() {
+	f.ctl.mu.Lock()
+	f.ctl.flushes++
+	f.ctl.mu.Unlock()
+	if flush := f.wrapped.Features().DirCacheFlush; flush != nil {
+		flush()
+	}
 }
 
 func (f *Fs) Name() string              { return f.name }
@@ -128,6 +162,11 @@ func (f *Fs) UnWrap() fs.Fs             { return f.wrapped }
 func (f *Fs) hidden(remote string) bool { return f.ctl.Hide != nil && f.ctl.Hide(remote) }
 
 func (f *Fs) List(ctx context.Context, dir string) (fs.DirEntries, error) {
+	if f.ctl.ListError != nil {
+		if err := f.ctl.ListError(dir, f.ctl.nextList(dir)); err != nil {
+			return nil, err
+		}
+	}
 	entries, err := f.wrapped.List(ctx, dir)
 	if err != nil {
 		return nil, err

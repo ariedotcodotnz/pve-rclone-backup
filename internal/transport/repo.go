@@ -171,7 +171,11 @@ type Entry struct {
 // List lists dir non-recursively. A missing directory yields
 // fs.ErrorDirNotFound.
 func (t *Target) List(ctx context.Context, dir string) ([]Entry, error) {
-	entries, err := t.f.List(ctx, dir)
+	var entries fs.DirEntries
+	err := t.retryStale(func() (err error) {
+		entries, err = t.f.List(ctx, dir)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("transport: list %q: %w", dir, err)
 	}
@@ -204,7 +208,7 @@ func (t *Target) List(ctx context.Context, dir string) ([]Entry, error) {
 
 // Rmdir removes an empty directory.
 func (t *Target) Rmdir(ctx context.Context, dir string) error {
-	if err := t.f.Rmdir(ctx, dir); err != nil {
+	if err := t.retryStale(func() error { return t.f.Rmdir(ctx, dir) }); err != nil {
 		return fmt.Errorf("transport: remove directory %q: %w", dir, err)
 	}
 	return nil

@@ -159,6 +159,73 @@ func TestInjectedFaultsAreClassified(t *testing.T) {
 	}
 }
 
+// itemNotFound is OneDrive's answer to a request for an item ID that no
+// longer exists, such as a cached ID of a folder deleted in the web
+// interface.
+func itemNotFound() error {
+	e := &onedriveapi.Error{}
+	e.ErrorInfo.Code, e.ErrorInfo.Message = "itemNotFound", "The resource could not be found."
+	return e
+}
+
+func TestStaleDirectoryCacheIsFlushedAndRetried(t *testing.T) {
+	ctl := &faultfs.Controller{
+		PutError: func(_ string, attempt int) error {
+			if attempt == 1 {
+				return itemNotFound()
+			}
+			return nil
+		},
+		ListError: func(_ string, attempt int) error {
+			if attempt == 1 {
+				return itemNotFound()
+			}
+			return nil
+		},
+	}
+	crypted, _, _ := faultyRepo(t, ctl)
+	if _, err := crypted.PutBytes(t.Context(), "keycheck", []byte("key check")); err != nil {
+		t.Fatalf("upload after a stale directory ID: %v", err)
+	}
+	// The flush reaches the backend below crypt.
+	if ctl.TotalPuts() != 2 || ctl.Flushes() != 1 {
+		t.Fatalf("puts %d, flushes %d; want 2 and 1", ctl.TotalPuts(), ctl.Flushes())
+	}
+	entries, err := crypted.List(t.Context(), "")
+	if err != nil || len(entries) != 1 || entries[0].Name != "keycheck" {
+		t.Fatalf("listing after a stale directory ID: %v %v", entries, err)
+	}
+	if ctl.Flushes() != 2 {
+		t.Fatalf("flushes %d, want 2", ctl.Flushes())
+	}
+}
+
+func TestStaleDirectoryCacheIsRetriedOnlyOnce(t *testing.T) {
+	ctl := &faultfs.Controller{PutError: func(string, int) error { return itemNotFound() }}
+	crypted, _, _ := faultyRepo(t, ctl)
+	_, err := crypted.PutBytes(t.Context(), "keycheck", []byte("key check"))
+	if Classify(err) != ClassNotFound {
+		t.Fatalf("error %v, want class %s", err, ClassNotFound)
+	}
+	if ctl.TotalPuts() != 2 || ctl.Flushes() != 1 {
+		t.Fatalf("puts %d, flushes %d; want 2 and 1", ctl.TotalPuts(), ctl.Flushes())
+	}
+}
+
+func TestMissingItemsDoNotFlushTheDirectoryCache(t *testing.T) {
+	ctl := &faultfs.Controller{}
+	crypted, _, _ := faultyRepo(t, ctl)
+	if _, err := crypted.List(t.Context(), "nonexistent"); Classify(err) != ClassNotFound {
+		t.Fatalf("listing a missing directory: %v", err)
+	}
+	if _, err := crypted.Stat(t.Context(), "nonexistent"); Classify(err) != ClassNotFound {
+		t.Fatalf("stat of a missing object: %v", err)
+	}
+	if ctl.Flushes() != 0 {
+		t.Fatalf("flushes %d for items that simply do not exist", ctl.Flushes())
+	}
+}
+
 func TestThrottlingIsRetried(t *testing.T) {
 	ctl := &faultfs.Controller{PutError: func(_ string, attempt int) error {
 		if attempt == 1 {

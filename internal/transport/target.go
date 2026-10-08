@@ -109,7 +109,11 @@ func (t *Target) PutSegment(ctx context.Context, remote string, seg Segment, who
 		src.plainType = t.baseHash
 	}
 
-	dst, err := operations.Copy(ctx, t.f, nil, remote, src)
+	var dst fs.Object
+	err := t.retryStale(func() (err error) {
+		dst, err = operations.Copy(ctx, t.f, nil, remote, src)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("transport: upload %s: %w", remote, err)
 	}
@@ -155,6 +159,22 @@ func (t *Target) PutSegment(ctx context.Context, remote string, seg Segment, who
 		}
 	}
 	return res, nil
+}
+
+// retryStale runs op and, if it failed because a directory ID cached by
+// rclone is stale, flushes the directory cache and runs op once more.
+// Without this, a repository folder deleted or recreated outside this
+// process would break every operation in it until the process restarted.
+func (t *Target) retryStale(op func() error) error {
+	err := op()
+	if !staleDirCache(err) {
+		return err
+	}
+	// A crypt target passes the flush on to the backend it wraps.
+	if flush := t.f.Features().DirCacheFlush; flush != nil {
+		flush()
+	}
+	return op()
 }
 
 // ObjectInfo describes a stored object.
@@ -252,7 +272,7 @@ func (t *Target) Remove(ctx context.Context, remote string) error {
 	if err != nil {
 		return fmt.Errorf("transport: remove %s: %w", remote, err)
 	}
-	if err := o.Remove(ctx); err != nil {
+	if err := t.retryStale(func() error { return o.Remove(ctx) }); err != nil {
 		return fmt.Errorf("transport: remove %s: %w", remote, err)
 	}
 	return nil

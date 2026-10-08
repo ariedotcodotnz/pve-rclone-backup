@@ -43,6 +43,7 @@ func TestClassify(t *testing.T) {
 		{crypt.ErrorEncryptedBadMagic, ClassIntegrity},
 		{fmt.Errorf("stat: %w", fs.ErrorObjectNotFound), ClassNotFound},
 		{fs.ErrorDirNotFound, ClassNotFound},
+		{fmt.Errorf("upload keycheck: %w", odErr("itemNotFound", "")), ClassNotFound},
 		{fserrors.FatalError(odErr("quotaLimitReached", "")), ClassQuota},
 		{odErr("insufficientStorage", ""), ClassQuota},
 		{odErr("InvalidAuthenticationToken", ""), ClassAuth},
