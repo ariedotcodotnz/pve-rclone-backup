@@ -84,8 +84,11 @@ func Entry(storeID string, b repo.ScannedBackup, now time.Time) (*store.Backup, 
 }
 
 // Resync scans a source in the repository and atomically replaces the
-// storage's catalogue.
+// storage's catalogue. Entries written while the scan runs, such as a
+// backup committed meanwhile, are newer than the scan and are kept.
 func Resync(ctx context.Context, st *store.Store, storeID string, r *repo.Repo, source string) (*Report, error) {
+	cs := st.BeginCatalogSync(storeID)
+	defer cs.Close()
 	scanned, err := r.Scan(ctx, source)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: scan %s: %w", source, err)
@@ -131,7 +134,7 @@ func Resync(ctx context.Context, st *store.Store, storeID string, r *repo.Repo, 
 			}
 		}
 	}
-	if err := st.ReplaceCatalog(ctx, storeID, entries); err != nil {
+	if err := cs.Replace(ctx, entries); err != nil {
 		return nil, err
 	}
 	return rep, nil

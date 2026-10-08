@@ -194,7 +194,12 @@ func putBackup(ctx context.Context, e execer, b *Backup) error {
 // entry and marks it for pushing to the remote meta document.
 func (s *Store) UpdateBackup(ctx context.Context, storeID, volname string, mutate func(b *Backup) error) (*Backup, error) {
 	var out *Backup
-	err := s.Tx(ctx, func(tx *sql.Tx) error {
+	err := s.writeEntry(storeID, volname, func() error { return s.updateBackup(ctx, storeID, volname, mutate, &out) })
+	return out, err
+}
+
+func (s *Store) updateBackup(ctx context.Context, storeID, volname string, mutate func(b *Backup) error, out **Backup) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
 		b, err := scanBackup(tx.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE storeid = ? AND volname = ?", storeID, volname))
 		if err != nil {
 			return err
@@ -206,10 +211,9 @@ func (s *Store) UpdateBackup(ctx context.Context, storeID, volname string, mutat
 		if err := putBackup(ctx, tx, b); err != nil {
 			return err
 		}
-		out = b
+		*out = b
 		return nil
 	})
-	return out, err
 }
 
 // DirtyBackups returns entries whose meta document must be pushed.
@@ -233,18 +237,22 @@ func (s *Store) DirtyBackups(ctx context.Context, limit int) ([]*Backup, error) 
 // MetaPushed clears the dirty flag if the entry did not change since rev
 // was pushed.
 func (s *Store) MetaPushed(ctx context.Context, storeID, volname string, rev int64) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE backups SET meta_dirty = 0 WHERE storeid = ? AND volname = ? AND meta_rev = ?",
-		storeID, volname, rev)
-	return err
+	return s.writeEntry(storeID, volname, func() error {
+		_, err := s.db.ExecContext(ctx, "UPDATE backups SET meta_dirty = 0 WHERE storeid = ? AND volname = ? AND meta_rev = ?",
+			storeID, volname, rev)
+		return err
+	})
 }
 
 // PutBackup inserts or replaces a catalogue entry (keyed by storage and
 // volname).
 func (s *Store) PutBackup(ctx context.Context, b *Backup) error {
-	if err := putBackup(ctx, s.db, b); err != nil {
-		return fmt.Errorf("store: put backup %s:%s: %w", b.StoreID, b.Volname, err)
-	}
-	return nil
+	return s.writeEntry(b.StoreID, b.Volname, func() error {
+		if err := putBackup(ctx, s.db, b); err != nil {
+			return fmt.Errorf("store: put backup %s:%s: %w", b.StoreID, b.Volname, err)
+		}
+		return nil
+	})
 }
 
 // GetBackup returns a catalogue entry.
@@ -300,14 +308,84 @@ func (s *Store) ListBackups(ctx context.Context, storeID string, f BackupFilter)
 
 // DeleteBackup removes a catalogue entry.
 func (s *Store) DeleteBackup(ctx context.Context, storeID, volname string) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM backups WHERE storeid = ? AND volname = ?", storeID, volname)
-	return err
+	return s.writeEntry(storeID, volname, func() error {
+		_, err := s.db.ExecContext(ctx, "DELETE FROM backups WHERE storeid = ? AND volname = ?", storeID, volname)
+		return err
+	})
 }
 
 // ReplaceCatalog atomically replaces a storage's catalogue with the
 // entries rebuilt from the remote repository. Local verification state of
-// entries whose archive digest is unchanged is preserved.
+// entries whose archive digest is unchanged is preserved. A resync
+// replaces the catalogue through a CatalogSync instead.
 func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*Backup) error {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	return s.replaceCatalog(ctx, storeID, backups, nil)
+}
+
+// CatalogSync replaces a storage's catalogue with the result of a scan of
+// the remote repository. A scan takes a while, and an entry written in the
+// meantime (a backup committed, deleted or verified, or its meta document
+// pushed) is newer than what the scan saw: the sync records such entries
+// and Replace leaves them as they are.
+type CatalogSync struct {
+	s       *Store
+	storeID string
+	changed map[string]bool // volnames written since the sync began
+}
+
+// BeginCatalogSync starts a sync of a storage's catalogue. Begin it before
+// scanning the remote, and end it with Replace or Close.
+func (s *Store) BeginCatalogSync(storeID string) *CatalogSync {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	c := &CatalogSync{s: s, storeID: storeID, changed: map[string]bool{}}
+	if s.catalogSyncs == nil {
+		s.catalogSyncs = map[*CatalogSync]struct{}{}
+	}
+	s.catalogSyncs[c] = struct{}{}
+	return c
+}
+
+// Close ends the sync without changing the catalogue. It does nothing
+// after Replace.
+func (c *CatalogSync) Close() {
+	c.s.catalogMu.Lock()
+	defer c.s.catalogMu.Unlock()
+	delete(c.s.catalogSyncs, c)
+}
+
+// Replace replaces the storage's catalogue with backups, except for the
+// entries written since the sync began, and ends the sync.
+func (c *CatalogSync) Replace(ctx context.Context, backups []*Backup) error {
+	c.s.catalogMu.Lock()
+	defer c.s.catalogMu.Unlock()
+	if _, open := c.s.catalogSyncs[c]; !open {
+		return errors.New("store: catalogue sync already ended")
+	}
+	delete(c.s.catalogSyncs, c)
+	return c.s.replaceCatalog(ctx, c.storeID, backups, c.changed)
+}
+
+// writeEntry runs a write of a catalogue entry after recording it in the
+// storage's open syncs. Holding catalogMu throughout, a write happens
+// either entirely before a sync begins (so the scan that follows sees its
+// remote state) or is recorded by it.
+func (s *Store) writeEntry(storeID, volname string, write func() error) error {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	for c := range s.catalogSyncs {
+		if c.storeID == storeID {
+			c.changed[volname] = true
+		}
+	}
+	return write()
+}
+
+// replaceCatalog replaces a storage's catalogue, leaving the entries named
+// in keep as they are. The caller holds catalogMu.
+func (s *Store) replaceCatalog(ctx context.Context, storeID string, backups []*Backup, keep map[string]bool) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		prev := map[string]*Backup{}
 		rows, err := tx.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE storeid = ?", storeID)
@@ -325,12 +403,20 @@ func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*B
 		if err := rows.Close(); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM backups WHERE storeid = ?", storeID); err != nil {
-			return err
+		for volname := range prev {
+			if keep[volname] {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM backups WHERE storeid = ? AND volname = ?", storeID, volname); err != nil {
+				return err
+			}
 		}
 		for _, b := range backups {
 			if b.StoreID != storeID {
 				return fmt.Errorf("store: catalogue entry %s belongs to storage %s, not %s", b.Volname, b.StoreID, storeID)
+			}
+			if keep[b.Volname] {
+				continue
 			}
 			if p, ok := prev[b.Volname]; ok {
 				mergeLocal(p, b)
@@ -370,6 +456,10 @@ func mergeLocal(p, b *Backup) {
 // keeping the local state of an existing entry of the same archive like
 // ReplaceCatalog does.
 func (s *Store) MergeBackup(ctx context.Context, b *Backup) error {
+	return s.writeEntry(b.StoreID, b.Volname, func() error { return s.mergeBackup(ctx, b) })
+}
+
+func (s *Store) mergeBackup(ctx context.Context, b *Backup) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		p, err := scanBackup(tx.QueryRowContext(ctx,
 			"SELECT "+backupColumns+" FROM backups WHERE storeid = ? AND volname = ?", b.StoreID, b.Volname))

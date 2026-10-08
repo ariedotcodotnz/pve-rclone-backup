@@ -380,6 +380,82 @@ func TestCatalog(t *testing.T) {
 	}
 }
 
+// A resync scans the remote first and replaces the catalogue afterwards;
+// entries written in between are newer than the scan and must survive it.
+func TestCatalogSyncKeepsWritesMadeDuringTheScan(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	if err := s.PutStorage(ctx, &StorageRow{StoreID: "offsite", Remote: "od", BasePath: "pve-backups", Source: "homelab", ConfigHash: "h1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []*Backup{testBackup("b/deleted", 100, "s1"), testBackup("b/pushed", 101, "s2"), testBackup("b/stale", 102, "s3")} {
+		if err := s.PutBackup(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pushed, err := s.UpdateBackup(ctx, "offsite", "b/pushed", func(b *Backup) error { b.Notes = "new notes"; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cs := s.BeginCatalogSync("offsite")
+	defer cs.Close()
+	// The scan sees the remote as it was when the sync began.
+	oldPushed := testBackup("b/pushed", 101, "s2")
+	oldPushed.Notes = "old notes"
+	scanned := []*Backup{testBackup("b/deleted", 100, "s1"), oldPushed, testBackup("b/stale", 102, "s3"), testBackup("b/scanned", 103, "s4")}
+	// Meanwhile a backup is committed, one is deleted and a meta document
+	// is pushed.
+	if err := s.MergeBackup(ctx, testBackup("b/committed", 104, "s5")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteBackup(ctx, "offsite", "b/deleted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MetaPushed(ctx, "offsite", "b/pushed", pushed.MetaRev); err != nil {
+		t.Fatal(err)
+	}
+	// Another storage's writes do not concern this sync.
+	other := testBackup("b/stale", 102, "s3")
+	other.StoreID = "elsewhere"
+	if err := s.PutStorage(ctx, &StorageRow{StoreID: "elsewhere", Remote: "od", BasePath: "other", Source: "homelab", ConfigHash: "h2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutBackup(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cs.Replace(ctx, scanned); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListBackups(ctx, "offsite", BackupFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, b := range list {
+		names = append(names, b.Volname)
+	}
+	if got := strings.Join(names, " "); got != "b/pushed b/stale b/scanned b/committed" {
+		t.Fatalf("catalogue after resync = %s", got)
+	}
+	if b, _ := s.GetBackup(ctx, "offsite", "b/pushed"); b.Notes != "new notes" || b.MetaDirty {
+		t.Fatalf("pushed entry reverted to the scan: %+v", b)
+	}
+	if err := cs.Replace(ctx, scanned); err == nil {
+		t.Fatal("a sync replaced the catalogue twice")
+	}
+
+	// Writes after the sync ended are not recorded by it.
+	cs2 := s.BeginCatalogSync("offsite")
+	if err := cs2.Replace(ctx, []*Backup{testBackup("b/stale", 102, "s3")}); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.ListBackups(ctx, "offsite", BackupFilter{}); len(list) != 1 {
+		t.Fatalf("an ended sync still protected entries: %d left", len(list))
+	}
+}
+
 func TestRepositories(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()

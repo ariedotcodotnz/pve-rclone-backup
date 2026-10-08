@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"modernc.org/sqlite" // database/sql driver "sqlite"
@@ -43,6 +44,11 @@ type Store struct {
 	db   *sql.DB
 	path string
 	now  func() time.Time
+
+	// catalogMu orders writes of catalogue entries with the open
+	// catalogue syncs that record them (see BeginCatalogSync).
+	catalogMu    sync.Mutex
+	catalogSyncs map[*CatalogSync]struct{}
 }
 
 type migration struct {

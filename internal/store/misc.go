@@ -186,6 +186,10 @@ func (s *Store) ActiveAlerts(ctx context.Context) ([]Alert, error) {
 // SetVerification records a verification result on a catalogue entry. A
 // damaged result also marks a complete backup as damaged.
 func (s *Store) SetVerification(ctx context.Context, storeID, volname string, level int, result string, damaged bool) error {
+	return s.writeEntry(storeID, volname, func() error { return s.setVerification(ctx, storeID, volname, level, result, damaged) })
+}
+
+func (s *Store) setVerification(ctx context.Context, storeID, volname string, level int, result string, damaged bool) error {
 	q := "UPDATE backups SET verify_level = ?, verified_at = ?, verify_result = ? WHERE storeid = ? AND volname = ?"
 	args := []any{level, s.unix(), result, storeID, volname}
 	if damaged {
