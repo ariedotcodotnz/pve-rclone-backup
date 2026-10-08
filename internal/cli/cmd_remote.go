@@ -323,8 +323,8 @@ func (a *App) authorize(ctx context.Context, s apiv1.RemoteSetup, answers map[st
 	if s.Status != apiv1.SetupAuthorizing {
 		return s, nil
 	}
-	redirect, ok := answers["redirect"]
-	if !ok {
+	redirect, given := answers["redirect"]
+	if !given {
 		if !a.Interactive {
 			return s, usagef("authorization needs the redirect URL: open %s and pass --answer redirect=URL", s.AuthURL)
 		}
@@ -338,9 +338,22 @@ func (a *App) authorize(ctx context.Context, s apiv1.RemoteSetup, answers map[st
 		}
 	}
 	delete(answers, "redirect")
-	var next apiv1.RemoteSetup
-	if err := a.do(ctx, http.MethodPost, "/v1/remote-setup/"+s.ID+"/oauth-redirect", apiv1.OAuthRedirect{URL: redirect}, &next); err != nil {
-		return s, err
+	for {
+		var next apiv1.RemoteSetup
+		err := a.do(ctx, http.MethodPost, "/v1/remote-setup/"+s.ID+"/oauth-redirect", apiv1.OAuthRedirect{URL: redirect}, &next)
+		if err == nil {
+			return next, nil
+		}
+		// A refused address (incomplete, or from an earlier sign-in) is not
+		// passed on, and the sign-in still waits for the right one.
+		var cur apiv1.RemoteSetup
+		if given || !a.Interactive || a.do(ctx, http.MethodGet, "/v1/remote-setup/"+s.ID, nil, &cur) != nil ||
+			cur.Status != apiv1.SetupAuthorizing {
+			return s, err
+		}
+		fmt.Fprintf(a.Err, "\n%v\nPaste the address the browser shows after signing in with the address above.\n", err)
+		if redirect, err = a.prompt("\nRedirect URL: "); err != nil {
+			return s, err
+		}
 	}
-	return next, nil
 }

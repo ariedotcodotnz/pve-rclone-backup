@@ -89,10 +89,11 @@ func ProviderAuthURL(ctx context.Context) (string, error) {
 // http://localhost:53682/?code=...&state=... The browser could not load it
 // because rclone's listener runs on this host, not on the user's machine.
 //
-// Only loopback redirect URLs for rclone's port are accepted (otherwise the
-// error is ErrInvalidRedirect); the state is checked by rclone itself. Any
-// answer from rclone, an error page included, ends its authorization, so
-// every other error means the authorization is over.
+// Only loopback redirect URLs for rclone's port, carrying the state of the
+// pending authorization, are accepted; otherwise the error is
+// ErrInvalidRedirect and nothing is relayed. Any answer from rclone, an
+// error page included, ends its authorization, so every other error means
+// the authorization is over.
 func RelayRedirect(ctx context.Context, pasted string) error {
 	u, err := url.Parse(pasted)
 	if err != nil {
@@ -113,6 +114,14 @@ func RelayRedirect(ctx context.Context, pasted string) error {
 		return err
 	} else if !running {
 		return ErrOAuthNotRunning
+	}
+	// rclone would end the authorization over a wrong state too. Refuse an
+	// address from another sign-in, typically an earlier attempt, here, so
+	// that the right one can still be pasted.
+	if authURL, err := ProviderAuthURL(ctx); err == nil {
+		if au, err := url.Parse(authURL); err == nil && au.Query().Get("state") != "" && au.Query().Get("state") != q.Get("state") {
+			return fmt.Errorf("%w: the address comes from an earlier sign-in, not from the address shown for this one", ErrInvalidRedirect)
+		}
 	}
 
 	relay := url.URL{Scheme: "http", Host: oauthBindAddress, Path: "/", RawQuery: q.Encode()}

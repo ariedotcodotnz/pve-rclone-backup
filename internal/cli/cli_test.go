@@ -139,6 +139,9 @@ func TestRemoteAddRelay(t *testing.T) {
 		"POST /v1/remote-setup/s1/oauth-redirect": func(w http.ResponseWriter, r *http.Request) error {
 			var req apiv1.OAuthRedirect
 			_ = api.DecodeJSON(r, &req)
+			if !strings.HasSuffix(req.URL, "state=abc") {
+				return api.Invalid("the address comes from an earlier sign-in")
+			}
 			mu.Lock()
 			redirect = req.URL
 			mu.Unlock()
@@ -170,6 +173,29 @@ func TestRemoteAddRelay(t *testing.T) {
 		t.Fatalf("answers %+v, redirect %q, finished %v", answers, redirect, finished)
 	}
 	answers, finished = nil, false
+	mu.Unlock()
+
+	// An address from an earlier sign-in is refused, and asked for again
+	// while the sign-in still waits.
+	in = strings.NewReader("\nhttp://localhost:53682/?code=old&state=old\nhttp://localhost:53682/?code=c&state=abc\n1\n")
+	r = run(t, socket, in, true, "remote", "add", "od", "--client-id", "app", "--param", "region=global")
+	if r.code != 0 || !strings.Contains(r.err, "earlier sign-in") || !strings.Contains(r.err, "Paste the address") {
+		t.Fatalf("refused paste: exit %d: %s%s", r.code, r.out, r.err)
+	}
+	mu.Lock()
+	if redirect != "http://localhost:53682/?code=c&state=abc" || !finished {
+		t.Fatalf("redirect %q, finished %v", redirect, finished)
+	}
+	answers, finished = nil, false
+	mu.Unlock()
+	// Given on the command line, it fails instead.
+	r = run(t, socket, nil, false, "remote", "add", "od", "--client-id", "app", "--param", "region=global",
+		"--answer", "redirect=http://localhost:53682/?code=old&state=old")
+	if r.code == 0 || !strings.Contains(r.err, "earlier sign-in") {
+		t.Fatalf("refused flag: exit %d: %s", r.code, r.err)
+	}
+	mu.Lock()
+	answers = nil
 	mu.Unlock()
 
 	// Non-interactive: everything comes from flags.

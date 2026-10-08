@@ -177,30 +177,34 @@ func TestOAuthRelayFlow(t *testing.T) {
 	}
 }
 
-// TestOAuthRelayStaleStateEndsFlow: rclone answers a redirect with the
-// wrong state with an error page and ends the authorization, so the relay
-// error must not be one that invites pasting again.
-func TestOAuthRelayStaleStateEndsFlow(t *testing.T) {
+// TestOAuthRelayRefusesAnotherSignIn: an address from an earlier sign-in
+// carries another state. It is refused without being relayed, since rclone
+// would end the authorization over it, and the right address still works.
+func TestOAuthRelayRefusesAnotherSignIn(t *testing.T) {
 	ctx := t.Context()
 	state, done, gotCode := beginOAuth(t, "oauthstale")
 
 	stale := "http://localhost:53682/?code=old-code&state=" + url.QueryEscape(state+"-old")
-	err := RelayRedirect(ctx, stale)
-	if err == nil || errors.Is(err, ErrInvalidRedirect) {
-		t.Fatalf("relaying a stale redirect = %v, want a terminal error", err)
+	if err := RelayRedirect(ctx, stale); !errors.Is(err, ErrInvalidRedirect) {
+		t.Fatalf("relaying an address from another sign-in = %v, want ErrInvalidRedirect", err)
 	}
 	select {
 	case r := <-done:
-		if r.err == nil {
-			t.Fatalf("configuration continued after a stale redirect: %+v", r.out)
+		t.Fatalf("authorization ended over a refused address: %+v, %v", r.out, r.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := RelayRedirect(ctx, "http://localhost:53682/?code=new-code&state="+url.QueryEscape(state)); err != nil {
+		t.Fatalf("relaying the right address after a refused one: %v", err)
+	}
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("authorization failed: %v", r.err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("authorization did not end after a stale redirect")
+		t.Fatal("authorization did not complete")
 	}
-	if err := RelayRedirect(ctx, "http://localhost:53682/?code=x&state="+url.QueryEscape(state)); !errors.Is(err, ErrOAuthNotRunning) {
-		t.Fatalf("relay after the authorization ended = %v, want ErrOAuthNotRunning", err)
-	}
-	if got := gotCode(); got != "" {
-		t.Fatalf("provider received code %q from a stale redirect", got)
+	if got := gotCode(); got != "new-code" {
+		t.Fatalf("provider received code %q, want new-code", got)
 	}
 }
