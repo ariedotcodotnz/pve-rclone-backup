@@ -18,9 +18,13 @@ Signing in uses a **relay**, so the Proxmox VE host needs no browser:
 2. After you approve access, Microsoft sends the browser to `http://localhost:53682/?code=...`.
    Nothing listens there on your device, so the browser shows an error page. That is expected.
 3. Copy the complete address from the address bar and paste it into the terminal. The daemon
-   hands the code to rclone, which exchanges it for a token.
-4. Answer rclone's questions about which drive to use. For a personal OneDrive, the suggested
-   answers are right.
+   hands the code to rclone, which exchanges it for a token. An address from an earlier attempt
+   does not work for this one: the command says so and asks again.
+4. For the type of connection, choose `onedrive`.
+5. For the drive, choose the one named **OneDrive**. Do not just press Enter: the suggested drive
+   is often a hidden system drive, such as `ODCMetadataArchive`. If rclone cannot use an answer,
+   it says why and asks again.
+6. Confirm the drive it found.
 
 ### Sign in with rclone instead
 

@@ -23,8 +23,10 @@ pve-rclone-backup remote add onedrive-main
 2. After you approve access, the browser tries to open `http://localhost:53682/...` and shows an
    error page. That is expected.
 3. Copy the complete address from the browser's address bar and paste it into the terminal.
-4. Answer the questions about which drive to use. For a personal OneDrive, the suggested answers
-   are right.
+4. For the type of connection, choose `onedrive`.
+5. For the drive, choose the one named **OneDrive**. Do not just press Enter: the suggested drive
+   is often a hidden system drive, such as `ODCMetadataArchive`.
+6. Confirm the drive it found.
 
 Then check that the remote works. This writes, reads back and deletes a small test file, and shows
 your quota:
@@ -49,13 +51,19 @@ This:
 1. creates an encrypted repository in the folder `pve-backups` of your OneDrive, with new random
    encryption keys;
 2. writes a **recovery kit** to `offsite-recovery-kit.txt` in the current directory;
-3. asks you to type the kit's checksum, to confirm that you have stored it safely;
+3. waits for you to confirm that you have stored the kit (see below);
 4. adds the storage `offsite` to Proxmox VE.
+
+While it waits, copy the kit off the host, for example from your computer with
+`scp root@<host>:/root/offsite-recovery-kit.txt .`, and keep it in a password manager or print it.
+Then type the kit's checksum, which the command printed above the prompt in the form
+`xxxx-xxxx-xxxx-xxxx`, and press Enter.
 
 !!! danger "Store the recovery kit before you go on"
     The recovery kit holds the encryption keys. Without it, your offsite backups **cannot be
     restored** if this host is lost: the keys exist nowhere else. Copy it somewhere off this host,
-    such as a password manager or a printout, then delete the local file.
+    such as a password manager or a printout, then delete the local file. Treat it like a
+    password: do not paste it into a terminal, a chat or an issue.
 
     To protect the kit with a passphrase, put the passphrase in a file and add
     `--kit-passphrase-file <file>`.
