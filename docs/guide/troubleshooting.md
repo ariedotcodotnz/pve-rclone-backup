@@ -99,6 +99,9 @@ Remove the line again afterwards.
 
 ## Questions
 
+**Can it run in an LXC container or a VM?**
+No. It is installed on the Proxmox VE host; see [where it runs](../getting-started/requirements.md#where-it-runs).
+
 **Do I need rclone installed?**
 No. rclone is built into the daemon. You only need rclone itself for
 [manual recovery](../manual-recovery.md) without this tool.

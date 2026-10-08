@@ -1,5 +1,19 @@
 # Requirements
 
+## Where it runs
+
+pve-rclone-backup is installed **on the Proxmox VE host itself**, on every node whose backups
+should go offsite, like other Proxmox VE storage plugins. It does not run in a container or a VM,
+because it has to work with Proxmox VE directly:
+
+- Proxmox VE's own services load its storage plugin, so that offsite backups appear in the GUI.
+- The daemon reads the archives in your backup storages as vzdump finishes them.
+- It keeps its settings, keys and credentials in the cluster file system, `/etc/pve`.
+- Restores run Proxmox VE's own tools, `qmrestore` and `pct`.
+
+The daemon runs as a systemd service with restrictions that do not get in the way of these tools.
+It opens no network ports. See the [security model](../reference/security.md).
+
 ## Proxmox VE
 
 - **Proxmox VE 9.0 or newer**, on amd64. The storage plugin supports storage plugin API versions
