@@ -277,6 +277,8 @@ func decodeStorage(props map[string]Raw, consumed map[string]bool) (*Storage, er
 		consumed["rclone-max-deletes"] = true
 		if v, err := decodeInt(r, new(int64(0)), nil); err != nil {
 			fail("rclone-max-deletes", err)
+		} else if v > int64(^uint(0)>>1) {
+			fail("rclone-max-deletes", errors.New("value exceeds the supported integer range"))
 		} else {
 			c.MaxDeletes = int(v)
 		}
