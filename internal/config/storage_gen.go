@@ -206,7 +206,7 @@ func decodeStorage(props map[string]Raw, consumed map[string]bool) (*Storage, er
 		if v, err := decodeInt(r, new(int64(1)), new(int64(8))); err != nil {
 			fail("rclone-transfers", err)
 		} else {
-			c.Transfers = int(v)
+			c.Transfers = v
 		}
 	}
 	if r, ok := props["rclone-bwlimit"]; ok {
@@ -262,7 +262,7 @@ func decodeStorage(props map[string]Raw, consumed map[string]bool) (*Storage, er
 		if v, err := decodeInt(r, new(int64(0)), nil); err != nil {
 			fail("rclone-keep-min", err)
 		} else {
-			c.KeepMin = int(v)
+			c.KeepMin = v
 		}
 	}
 	if r, ok := props["rclone-delete-grace"]; ok {
@@ -278,7 +278,7 @@ func decodeStorage(props map[string]Raw, consumed map[string]bool) (*Storage, er
 		if v, err := decodeInt(r, new(int64(0)), nil); err != nil {
 			fail("rclone-max-deletes", err)
 		} else {
-			c.MaxDeletes = int(v)
+			c.MaxDeletes = v
 		}
 	}
 	if r, ok := props["rclone-immutable"]; ok {

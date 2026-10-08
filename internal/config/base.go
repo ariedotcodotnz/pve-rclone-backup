@@ -181,11 +181,11 @@ func decodeBaseOptions(props map[string]Raw, consumed map[string]bool) (BaseOpti
 	}
 	if r, ok := take("max-protected-backups"); ok {
 		minimum := int64(-1)
-		v, err := decodeInt(r, &minimum, nil)
-		if err != nil {
+		if v, err := decodeInt(r, &minimum, nil); err != nil {
 			fail("max-protected-backups", err)
 		} else {
-			b.MaxProtectedBackups = &v
+			n := int64(v)
+			b.MaxProtectedBackups = &n
 		}
 	}
 	if r, ok := take("bwlimit"); ok {

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -199,6 +200,24 @@ func TestDurationsAndSizes(t *testing.T) {
 		if _, err := ParseSize(bad); err == nil {
 			t.Errorf("ParseSize(%q) accepted", bad)
 		}
+	}
+}
+
+func TestDecodeInt(t *testing.T) {
+	zero, eight := int64(0), int64(8)
+	for in, want := range map[string]int{"0": 0, "8": 8, "+3": 3} {
+		if got, err := decodeInt(Raw{Value: in}, &zero, &eight); err != nil || got != want {
+			t.Errorf("decodeInt(%q) = %v, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "9", "-1", "1.5", "0x8", "99999999999999999999"} {
+		if _, err := decodeInt(Raw{Value: bad}, &zero, &eight); err == nil {
+			t.Errorf("decodeInt(%q) accepted", bad)
+		}
+	}
+	// Values beyond int are refused, not wrapped around.
+	if _, err := decodeInt(Raw{Value: "99999999999999999999"}, &zero, nil); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Errorf("huge value: %v", err)
 	}
 }
 

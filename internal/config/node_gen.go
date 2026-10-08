@@ -69,7 +69,7 @@ func decodeNodeConfig(props map[string]Raw, consumed map[string]bool) (*NodeConf
 		if v, err := decodeInt(r, new(int64(1)), new(int64(16))); err != nil {
 			fail("upload-workers", err)
 		} else {
-			c.UploadWorkers = int(v)
+			c.UploadWorkers = v
 		}
 	}
 	if r, ok := props["scan-interval"]; ok {

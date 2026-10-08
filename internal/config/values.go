@@ -84,21 +84,24 @@ func decodeBool(r Raw) (bool, error) {
 
 var integerRe = regexp.MustCompile(`^[+-]?\d+$`)
 
-func decodeInt(r Raw, minimum, maximum *int64) (int64, error) {
+// decodeInt parses an integer setting into an int, the type settings are
+// held in, so that no narrowing conversion follows (strconv.Atoi checks
+// the range of int).
+func decodeInt(r Raw, minimum, maximum *int64) (int, error) {
 	if err := checkRaw(r); err != nil {
 		return 0, err
 	}
 	if !integerRe.MatchString(r.Value) {
 		return 0, fmt.Errorf("not an integer: %q", r.Value)
 	}
-	v, err := strconv.ParseInt(r.Value, 10, 64)
+	v, err := strconv.Atoi(r.Value)
 	if err != nil {
 		return 0, fmt.Errorf("integer out of range: %q", r.Value)
 	}
-	if minimum != nil && v < *minimum {
+	if minimum != nil && int64(v) < *minimum {
 		return 0, fmt.Errorf("value must be at least %d", *minimum)
 	}
-	if maximum != nil && v > *maximum {
+	if maximum != nil && int64(v) > *maximum {
 		return 0, fmt.Errorf("value must be at most %d", *maximum)
 	}
 	return v, nil

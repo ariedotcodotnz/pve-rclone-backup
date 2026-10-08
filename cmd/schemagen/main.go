@@ -381,8 +381,6 @@ func genGo(s *schemaFile, j job) ([]byte, error) {
 		}
 		fmt.Fprintf(&b, "\t\tif v, err := %s; err != nil {\n\t\t\tfail(%q, err)\n\t\t} else {\n", call, p.Key)
 		switch {
-		case p.Type == "integer":
-			fmt.Fprintf(&b, "\t\t\tc.%s = int(v)\n", p.Field)
 		case p.Type == "duration" && !p.AllowOff:
 			fmt.Fprintf(&b, "\t\t\tc.%s = v.Duration\n", p.Field)
 		default:
