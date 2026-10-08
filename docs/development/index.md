@@ -70,6 +70,26 @@ make docs
 
 `mkdocs build --strict` fails on broken links, which CI checks on every pull request.
 
+## Releases
+
+A version tag publishes a release:
+
+```sh
+git tag -a v0.1.0 -m "pve-rclone-backup 0.1.0"
+git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` then:
+
+1. runs the whole CI suite on the tagged commit, which builds and tests the package with the tag's
+   version;
+2. publishes the package on GitHub Releases with a `SHA256SUMS` file and a build provenance
+   attestation.
+
+Tags look like `v1.2.3`. A tag with a suffix such as `v0.1.0-alpha.1` makes a pre-release,
+whose Debian version is `0.1.0~alpha.1`; Debian sorts that before `0.1.0`. Other tags fail the
+workflow before anything is built.
+
 ## License
 
 AGPL-3.0-or-later. Each source file carries an SPDX header.

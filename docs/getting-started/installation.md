@@ -10,12 +10,42 @@ Install it on every node that should replicate backups or list offsite backups.
 
 ## Get the package
 
-No release packages are published yet. Either build the package yourself, or download the `deb`
-artifact of a successful [CI run](https://github.com/ariedotcodotnz/pve-rclone-backup/actions/workflows/ci.yml)
-on the `master` branch.
+### A release
 
-To build it you need Go 1.26 or newer, `make` and `dpkg-deb`. Any Linux machine works; it does not
-have to be the Proxmox VE host.
+Each version is published on the
+[Releases page](https://github.com/ariedotcodotnz/pve-rclone-backup/releases), with a checksum
+file. Download both on the node and check the package:
+
+```sh
+wget https://github.com/ariedotcodotnz/pve-rclone-backup/releases/download/<tag>/pve-rclone-backup_<version>_amd64.deb \
+     https://github.com/ariedotcodotnz/pve-rclone-backup/releases/download/<tag>/SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+Each release lists these commands with the right names filled in. Release packages are built by
+GitHub Actions from the tagged source. To confirm that a package came from there, use the
+[GitHub CLI](https://cli.github.com/) on any machine:
+
+```sh
+gh attestation verify pve-rclone-backup_<version>_amd64.deb --repo ariedotcodotnz/pve-rclone-backup
+```
+
+### A development build
+
+Every commit to `master` is built and tested by CI, which keeps the package for 90 days as the
+`deb` artifact of the [CI run](https://github.com/ariedotcodotnz/pve-rclone-backup/actions/workflows/ci.yml).
+Downloading artifacts needs a GitHub login, for example with the GitHub CLI:
+
+```sh
+run=$(gh run list --repo ariedotcodotnz/pve-rclone-backup --workflow ci.yml --branch master \
+    --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run download "$run" --repo ariedotcodotnz/pve-rclone-backup --name deb
+```
+
+### Build it yourself
+
+You need Go 1.26 or newer, `make` and `dpkg-deb`. Any Linux machine works; it does not have to be
+the Proxmox VE host.
 
 ```sh
 git clone https://github.com/ariedotcodotnz/pve-rclone-backup.git
@@ -27,8 +57,9 @@ The package is written to `dist/pve-rclone-backup_<version>_amd64.deb`.
 
 ## Install
 
-Copy the package to the node and install it with `apt`, which also installs any missing
-dependencies:
+Install the package on the Proxmox VE host itself, not in a container or VM; see
+[Requirements](requirements.md#where-it-runs). Copy it to the node if you downloaded or built it
+elsewhere, and install it with `apt`, which also installs any missing dependencies:
 
 ```sh
 apt install ./pve-rclone-backup_<version>_amd64.deb

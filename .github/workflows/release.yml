@@ -1,0 +1,92 @@
+name: release
+
+# Publishes a release for every version tag: vMAJOR.MINOR.PATCH, or
+# vMAJOR.MINOR.PATCH-PRERELEASE (such as v0.1.0-alpha.1) for a pre-release.
+# The whole CI suite runs on the tagged commit, which builds and tests the
+# package with the tag's version; the .deb is then published on GitHub
+# Releases with its checksum and a build provenance attestation.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      deb: ${{ steps.version.outputs.deb }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-([0-9A-Za-z.]+))?$ ]]; then
+            echo "::error::$TAG is not a version tag (vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE)"
+            exit 1
+          fi
+          release=${BASH_REMATCH[1]} pre=${BASH_REMATCH[3]}
+          # Debian sorts "~" before the release itself: 0.1.0~alpha.1 < 0.1.0.
+          echo "deb=$release${pre:+~$pre}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${pre:+true}" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    with:
+      deb-version: ${{ needs.version.outputs.deb }}
+
+  publish:
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: build
+      - name: Name the package after the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        # GitHub renames assets with characters such as "~"; the tag's own
+        # spelling is safe. The version inside the package is unchanged.
+        run: |
+          mkdir dist
+          mv build/pve-rclone-backup_*_amd64.deb "dist/pve-rclone-backup_${TAG#v}_amd64.deb"
+          (cd dist && sha256sum -- *.deb > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*.deb
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          deb="pve-rclone-backup_${TAG#v}_amd64.deb"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG"
+          cat > notes.md <<EOF
+          ## Install
+
+          On each Proxmox VE 9 node, as root:
+
+          \`\`\`sh
+          wget $url/$deb $url/SHA256SUMS
+          sha256sum -c SHA256SUMS
+          apt install ./$deb
+          \`\`\`
+
+          The package was built by GitHub Actions from this tag. To check that, run
+          \`gh attestation verify $deb --repo $GITHUB_REPOSITORY\`.
+
+          See the [documentation](https://ariedotcodotnz.github.io/pve-rclone-backup/) to set it up.
+          EOF
+          gh release create "$TAG" dist/*.deb dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$TAG" --generate-notes --notes "$(cat notes.md)" ${PRERELEASE:+--prerelease}

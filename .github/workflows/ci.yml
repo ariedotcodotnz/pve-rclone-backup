@@ -4,6 +4,13 @@ on:
   push:
     branches: [master]
   pull_request:
+  # The release workflow runs the whole suite on a tagged commit first.
+  workflow_call:
+    inputs:
+      deb-version:
+        description: Debian version of the package; empty for a development version
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -67,7 +74,9 @@ jobs:
         with:
           go-version: "1.26.x"
       - name: Build the package and install, use and purge it in the PVE container
-        run: make deb-test
+        env:
+          RELEASE_VERSION: ${{ inputs.deb-version }}
+        run: make deb-test ${RELEASE_VERSION:+DEB_VERSION="$RELEASE_VERSION"}
       - uses: actions/upload-artifact@v7
         with:
           name: deb

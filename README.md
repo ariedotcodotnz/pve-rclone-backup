@@ -25,7 +25,9 @@ Architecture decisions are recorded in [`docs/adr/`](docs/adr/).
 
 ## Getting started
 
-These commands run as root on a PVE node with the daemon running.
+Install the package from the [Releases page](https://github.com/ariedotcodotnz/pve-rclone-backup/releases)
+on each Proxmox VE node (on the host, not in a container): `apt install ./pve-rclone-backup_<version>_amd64.deb`.
+These commands then run as root on the node.
 
 1. Connect a OneDrive account. The command prints a Microsoft sign-in address you can open on
    any device. After you approve access, the browser lands on an error page at
