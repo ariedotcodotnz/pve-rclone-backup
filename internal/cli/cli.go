@@ -57,6 +57,9 @@ type App struct {
 	// PVESH runs pvesh (replaced in tests).
 	PVESH func(ctx context.Context, args ...string) ([]byte, error)
 	Now   func() time.Time
+	// Prompt lets terminal clients collect answers without reading stdin.
+	// Secret answers must be masked by the client.
+	Prompt func(question string, secret bool) (string, error)
 
 	client *client.Client
 	reader *bufio.Reader

@@ -20,12 +20,22 @@ var pollInterval = time.Second
 
 // waitJob follows a job until it finishes, printing progress and history.
 func (a *App) waitJob(ctx context.Context, id int64) error {
+	stopped := func() error {
+		fmt.Fprintf(a.Err, "Stopped waiting; job %d continues in the background ('pve-rclone-backup queue cancel %d' stops it).\n", id, id)
+		return ctx.Err()
+	}
 	seen := 0
 	lastProgress := time.Time{}
 	var lastRetry int64
 	for {
 		var d apiv1.JobDetail
-		if err := a.do(context.WithoutCancel(ctx), http.MethodGet, fmt.Sprintf("/v1/jobs/%d", id), nil, &d); err != nil {
+		if ctx.Err() != nil {
+			return stopped()
+		}
+		if err := a.do(ctx, http.MethodGet, fmt.Sprintf("/v1/jobs/%d", id), nil, &d); err != nil {
+			if ctx.Err() != nil {
+				return stopped()
+			}
 			return err
 		}
 		for ; seen < len(d.Events); seen++ {
@@ -49,8 +59,7 @@ func (a *App) waitJob(ctx context.Context, id int64) error {
 		}
 		select {
 		case <-ctx.Done():
-			fmt.Fprintf(a.Err, "Stopped waiting; job %d continues in the background ('pve-rclone-backup queue cancel %d' stops it).\n", id, id)
-			return ctx.Err()
+			return stopped()
 		case <-time.After(pollInterval):
 		}
 	}

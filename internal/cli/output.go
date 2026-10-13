@@ -97,6 +97,10 @@ func yesNo(b bool) string {
 
 // prompt asks a question and returns the trimmed answer.
 func (a *App) prompt(question string) (string, error) {
+	if a.Prompt != nil {
+		line, err := a.Prompt(question, false)
+		return strings.TrimSpace(line), err
+	}
 	fmt.Fprint(a.Err, question)
 	line, err := a.readLine()
 	return strings.TrimSpace(line), err
@@ -104,6 +108,9 @@ func (a *App) prompt(question string) (string, error) {
 
 // promptSecret asks for a secret without echo when stdin is a terminal.
 func (a *App) promptSecret(question string) (string, error) {
+	if a.Prompt != nil {
+		return a.Prompt(question, true)
+	}
 	fmt.Fprint(a.Err, question)
 	if f, ok := a.In.(interface{ Fd() uintptr }); ok && term.IsTerminal(int(f.Fd())) {
 		b, err := term.ReadPassword(int(f.Fd()))

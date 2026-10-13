@@ -20,7 +20,7 @@ func (a *App) tuiCommand() *cobra.Command {
 			if !a.Interactive {
 				return usagef("the TUI needs a terminal")
 			}
-			return tui.Run(cmd.Context(), tui.Options{Client: a.api(), PVESH: a.PVESH})
+			return tui.Run(cmd.Context(), a.tuiOptions())
 		},
 	}
 }
