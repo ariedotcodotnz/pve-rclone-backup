@@ -63,7 +63,10 @@ These commands then run as root on the node.
    pve-rclone-backup backup fetch offsite:backup/vzdump-lxc-200-2026_10_04-02_00_01.tar.zst --to-storage local
    ```
 
-`pve-rclone-backup tui` offers the same in an interactive terminal interface, and
+`pve-rclone-backup tui` offers every CLI command and option in a keyboard-driven terminal
+interface that works over SSH (`ssh -t root@pve-node pve-rclone-backup tui`). Press `7` for
+searchable action forms or `A` for actions on the selected row; see the [TUI guide](docs/guide/tui.md).
+The interface uses Bubble Tea, Bubbles and Lip Gloss. Alternatively,
 `pve-rclone-backup doctor` checks the installation. Every command accepts `-o json`.
 
 The [documentation](https://ariedotcodotnz.github.io/pve-rclone-backup/) covers installation, the
