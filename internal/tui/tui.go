@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -35,10 +36,15 @@ type Options struct {
 	NoEvents bool
 	// Refresh is the polling interval (default 5s).
 	Refresh time.Duration
+	// Commands and Execute expose the CLI's complete command tree in forms.
+	Commands []Command
+	Execute  ExecuteFunc
 }
 
 // Run shows the TUI until the user quits.
 func Run(ctx context.Context, opts Options) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	_, err := tea.NewProgram(New(ctx, opts), tea.WithContext(ctx)).Run()
 	return err
 }
@@ -52,9 +58,10 @@ const (
 	tabRemotes
 	tabStorages
 	tabDoctor
+	tabActions
 )
 
-var tabNames = []string{"Dashboard", "Backups", "Queue", "Remotes", "Storages", "Diagnostics"}
+var tabNames = []string{"Dashboard", "Backups", "Queue", "Remotes", "Storages", "Diagnostics", "Actions"}
 
 // backupRow is a backup with its storage.
 type backupRow struct {
@@ -82,13 +89,17 @@ type Model struct {
 	remotes  []apiv1.Remote
 	checks   []doctor.Check
 
-	loadErr    error
-	flash      string
-	flashErr   bool
-	busy       string
-	refreshing bool
-	overlay    overlay
-	events     <-chan apiv1.Event
+	loadErr       error
+	flash         string
+	flashErr      bool
+	busy          string
+	refreshing    bool
+	overlay       overlay
+	events        <-chan apiv1.Event
+	actions       []Command
+	actionsQuery  string
+	running       *commandRun
+	dashboardPort viewport.Model
 }
 
 // New returns the initial model.
@@ -104,6 +115,9 @@ func New(ctx context.Context, opts Options) *Model {
 	m := &Model{ctx: ctx, c: opts.Client, opts: opts, width: 100, height: 30}
 	m.tbl = table.New(table.WithFocused(true))
 	m.tbl.SetStyles(tableStyles())
+	m.dashboardPort = viewport.New()
+	m.dashboardPort.SoftWrap = true
+	m.dashboardPort.MouseWheelEnabled = false
 	return m
 }
 
@@ -127,6 +141,10 @@ type (
 		err  error
 		next overlay
 		tab  *tab
+	}
+	startActionMsg struct {
+		busy string
+		run  tea.Cmd
 	}
 )
 
@@ -198,25 +216,37 @@ func (m *Model) loadChecks() tea.Cmd {
 
 // action runs fn in the background and reports its outcome.
 func (m *Model) action(busy string, fn func(ctx context.Context) doneMsg) tea.Cmd {
-	m.busy = busy
 	ctx := m.ctx
-	return func() tea.Msg { return fn(ctx) }
+	return func() tea.Msg { return startActionMsg{busy, func() tea.Msg { return fn(ctx) }} }
 }
 
 // Update implements tea.Model.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := m.commandMessage(msg); handled {
+		return m, cmd
+	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+c" {
+		if m.running != nil {
+			m.running.cancel()
+			m.overlay = m.running.output
+			return m, nil
+		}
+		return m, tea.Quit
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.rebuildTable()
 		return m, nil
 	case refreshMsg:
+		selection := m.selectionID()
 		m.refreshing = false
 		m.loadErr = msg.err
 		if msg.err == nil {
 			m.status, m.storages, m.backups, m.jobs, m.remotes = msg.status, msg.storages, msg.backups, msg.jobs, msg.remotes
 		}
 		m.rebuildTable()
+		m.restoreSelection(selection)
 		return m, nil
 	case checksMsg:
 		m.checks = msg
@@ -252,6 +282,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = msg.next
 		}
 		return m, m.refresh()
+	case startActionMsg:
+		if m.busy != "" {
+			return m, nil
+		}
+		m.busy = msg.busy
+		return m, msg.run
 	}
 	if m.overlay != nil {
 		next, cmd := m.overlay.update(m, msg)
@@ -282,7 +318,7 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	case "shift+tab", "left", "h":
 		m.switchTab((m.tab + tab(len(tabNames)) - 1) % tab(len(tabNames)))
 		return m.tabEntered()
-	case "1", "2", "3", "4", "5", "6":
+	case "1", "2", "3", "4", "5", "6", "7":
 		m.switchTab(tab(k.String()[0] - '1'))
 		return m.tabEntered()
 	case "ctrl+r", "f5":
@@ -291,10 +327,33 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		m.overlay = newInfo("Keys", helpText())
 		return nil
 	}
+	if m.busy != "" {
+		return nil
+	}
+	if k.String() == ":" {
+		m.switchTab(tabActions)
+		return nil
+	}
+	if k.String() == "A" && m.opts.Execute != nil {
+		m.overlay = m.contextActions()
+		return nil
+	}
 	if cmd, ok := m.tabKey(k.String()); ok {
 		return cmd
 	}
 	var cmd tea.Cmd
+	if m.tab == tabDashboard {
+		if k.String() == "home" {
+			m.dashboardPort.GotoTop()
+			return nil
+		}
+		if k.String() == "end" {
+			m.dashboardPort.GotoBottom()
+			return nil
+		}
+		m.dashboardPort, cmd = m.dashboardPort.Update(k)
+		return cmd
+	}
 	m.tbl, cmd = m.tbl.Update(k)
 	return cmd
 }
@@ -329,6 +388,7 @@ func tableStyles() table.Styles {
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeNone
 	v.WindowTitle = "pve-rclone-backup"
 	return v
 }
@@ -343,19 +403,25 @@ func (m *Model) render() string {
 			tabs = append(tabs, inactiveTab.Render(label))
 		}
 	}
-	header := lipgloss.JoinHorizontal(lipgloss.Top, titleStyle.Render("pve-rclone-backup ")+" ", strings.Join(tabs, ""))
+	header := m.header(tabs)
 	var body string
 	switch {
-	case m.loadErr != nil:
+	case m.loadErr != nil && m.tab != tabActions:
 		body = errStyle.Render("Cannot reach the daemon: "+cleanLine(m.loadErr.Error())) + "\n\n" +
 			dimStyle.Render("Is pve-rclone-backupd running? (systemctl status pve-rclone-backupd)")
 	case m.tab == tabDashboard:
-		body = m.dashboard()
+		m.dashboardPort.SetWidth(max(1, m.width))
+		m.dashboardPort.SetHeight(m.bodyHeight())
+		m.dashboardPort.SetContent(m.dashboard())
+		body = m.dashboardPort.View()
+	case m.tab == tabActions && len(m.actions) == 0:
+		body = "No matching actions. Press / to change the search."
 	default:
+		m.tbl.SetHeight(m.bodyHeight())
 		body = m.tbl.View()
 	}
 	if m.overlay != nil {
-		body = m.overlay.view(m.width)
+		body = m.overlay.view(m.width, m.bodyHeight())
 	}
 	footer := dimStyle.Render(m.keysHint())
 	line := ""
@@ -367,23 +433,61 @@ func (m *Model) render() string {
 	case m.flash != "":
 		line = okStyle.Render(m.flash)
 	}
-	return header + "\n\n" + body + "\n\n" + line + "\n" + footer
+	if m.tab == tabActions && m.overlay == nil && m.actionsQuery != "" {
+		line = dimStyle.Render("Search: " + cleanLine(m.actionsQuery))
+	}
+	if m.width < 20 || m.height < 10 {
+		return "Terminal too small. Resize to at least 20 columns and 10 rows. Ctrl+c quits."
+	}
+	footer = lipgloss.Wrap(footer, max(1, m.width), " ")
+	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(header + "\n\n" + body + "\n\n" + line + "\n" + footer)
+}
+
+func (m *Model) header(tabs []string) string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("pve-rclone-backup"))
+	lineWidth := lipgloss.Width("pve-rclone-backup") + 2
+	if m.width < 130 {
+		b.WriteByte('\n')
+		lineWidth = 0
+	} else {
+		b.WriteString("  ")
+	}
+	for _, label := range tabs {
+		w := lipgloss.Width(label)
+		if lineWidth > 0 && lineWidth+w > m.width {
+			b.WriteByte('\n')
+			lineWidth = 0
+		}
+		b.WriteString(label)
+		lineWidth += w
+	}
+	return b.String()
+}
+
+func (m *Model) bodyHeight() int {
+	var tabs []string
+	for i, name := range tabNames {
+		tabs = append(tabs, fmt.Sprintf(" %d %s ", i+1, name))
+	}
+	footerHeight := lipgloss.Height(lipgloss.Wrap(m.keysHint(), max(1, m.width), " "))
+	return max(1, m.height-lipgloss.Height(m.header(tabs))-5-footerHeight)
 }
 
 func (m *Model) keysHint() string {
 	if m.overlay != nil {
 		return m.overlay.hint()
 	}
-	common := "tab/1-6 switch · ctrl+r refresh · ? keys · q quit"
+	common := "tab/1-7 views · A actions · : all actions · ctrl+r refresh · ? keys · q quit"
 	if h := tabHints[m.tab]; h != "" {
-		return h + " · " + common
+		return h + "\n" + common
 	}
 	return common
 }
 
 func helpText() string {
 	var b strings.Builder
-	b.WriteString("tab, shift+tab, 1-6   switch views\nctrl+r                refresh\nup/down               select\nq                     quit\n\n")
+	b.WriteString("tab, shift+tab, 1-7   switch views\nctrl+r / F5           refresh\nup/down, pgup/pgdown  select or scroll\nA                     actions for the selected row\n: / 7                 all CLI actions (including recovery and configuration)\nq / ctrl+c            quit (ctrl+c stops a running command first)\n\nForms: tab/shift+tab select field; ctrl+s submits; space toggles booleans.\nEdit an option to set it; ctrl+x explicitly sets an empty value or resets it.\nMultiline/repeated fields accept newlines; enter advances single-line fields.\nDuring a command: esc stops it or stops waiting for the daemon job.\n\n")
 	for i, name := range tabNames {
 		if h := tabHints[tab(i)]; h != "" {
 			fmt.Fprintf(&b, "%-12s %s\n", name, h)

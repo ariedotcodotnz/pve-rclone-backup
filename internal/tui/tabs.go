@@ -20,11 +20,12 @@ import (
 )
 
 var tabHints = map[tab]string{
-	tabBackups:  "enter details · v verify · f fetch · R restore · p protect · d delete · u undelete",
-	tabQueue:    "enter details · r retry · c cancel",
-	tabRemotes:  "a add · t test · c reconnect · x remove",
-	tabStorages: "enter details · i init · k recovery kit · s resync",
+	tabBackups:  "enter details · v verify · f fetch · R restore · n notes · H history · p protect · d delete · u undelete",
+	tabQueue:    "enter details · r retry · c cancel · p priority · s scan",
+	tabRemotes:  "enter details · a add · t test · c reconnect · x remove",
+	tabStorages: "enter details · i init · e settings · k recovery kit · s resync · p retention",
 	tabDoctor:   "enter run checks again",
+	tabActions:  "enter action form · / search · esc clear search",
 }
 
 func cleanLine(s string) string { return tf.Clean(s) }
@@ -142,6 +143,21 @@ func columns(width int, names []string, widths []int) []table.Column {
 		}
 		cols[i] = table.Column{Title: n, Width: w}
 	}
+	// Keep every column reachable on an ordinary 80-column SSH terminal.
+	available := max(len(cols), width-2*len(cols))
+	for {
+		total, widest := 0, 0
+		for i, c := range cols {
+			total += c.Width
+			if c.Width > cols[widest].Width {
+				widest = i
+			}
+		}
+		if total <= available || cols[widest].Width <= 1 {
+			break
+		}
+		cols[widest].Width--
+	}
 	return cols
 }
 
@@ -190,14 +206,25 @@ func (m *Model) rebuildTable() {
 			rows = append(rows, table.Row{map[string]string{doctor.OK: "OK", doctor.Warn: "WARN", doctor.Fail: "FAIL"}[c.Level],
 				cell(c.Subject, 26), cell(c.Message, 200)})
 		}
+	case tabActions:
+		m.actions = m.filterCommands(m.actionsQuery)
+		cols = columns(m.width, []string{"ACTION", "DESCRIPTION"}, []int{26})
+		for _, c := range m.actions {
+			rows = append(rows, table.Row{c.name(), c.Summary})
+		}
 	default:
 		return
+	}
+	for _, row := range rows {
+		for i, value := range row {
+			row[i] = cleanLine(value)
+		}
 	}
 	m.tbl.SetRows(nil)
 	m.tbl.SetColumns(cols)
 	m.tbl.SetRows(rows)
 	m.tbl.SetWidth(m.width)
-	m.tbl.SetHeight(max(5, m.height-8))
+	m.tbl.SetHeight(m.bodyHeight())
 	if cursor >= len(rows) {
 		cursor = len(rows) - 1
 	}
@@ -236,6 +263,46 @@ func (m *Model) selectedStorage() (apiv1.Storage, bool) {
 	return m.storages[i], true
 }
 
+func (m *Model) selectionID() string {
+	if b, ok := m.selectedBackup(); ok {
+		return b.volid()
+	}
+	if j, ok := m.selectedJob(); ok {
+		return strconv.FormatInt(j.ID, 10)
+	}
+	if r, ok := m.selectedRemote(); ok {
+		return r.Name
+	}
+	if s, ok := m.selectedStorage(); ok {
+		return s.ID
+	}
+	return ""
+}
+
+func (m *Model) restoreSelection(id string) {
+	if id == "" {
+		return
+	}
+	for i := range m.tbl.Rows() {
+		var candidate string
+		switch m.tab {
+		case tabBackups:
+			candidate = m.backups[i].volid()
+		case tabQueue:
+			candidate = strconv.FormatInt(m.jobs[i].ID, 10)
+		case tabRemotes:
+			candidate = m.remotes[i].Name
+		case tabStorages:
+			candidate = m.storages[i].ID
+		}
+		if candidate == id {
+			m.tbl.SetCursor(i)
+			return
+		}
+	}
+	m.tbl.SetCursor(0)
+}
+
 func backupPath(b backupRow) string {
 	return "/v1/storages/" + url.PathEscape(b.Storage) + "/backups/" + url.PathEscape(strings.TrimPrefix(b.Volname, "backup/"))
 }
@@ -254,7 +321,43 @@ func (m *Model) call(busy, method, path string, in any, ok func(out []byte) stri
 
 // tabKey handles a tab's own keys.
 func (m *Model) tabKey(key string) (tea.Cmd, bool) {
+	// Shared CLI-backed forms provide all options for common keyboard actions.
+	shortcuts := map[tab]map[string]string{
+		tabBackups:  {"v": "backup verify", "f": "backup fetch", "R": "restore", "n": "backup notes", "H": "verify history"},
+		tabQueue:    {"p": "queue priority", "s": "queue scan"},
+		tabRemotes:  {"enter": "remote show", "a": "remote add", "c": "remote reconnect", "b": "remote about"},
+		tabStorages: {"i": "storage init", "e": "storage set", "k": "recovery-kit export", "p": "retention preview", "P": "retention run"},
+	}
+	if name := shortcuts[m.tab][key]; name != "" {
+		// Actions that create or scan work without any selected row.
+		noSelection := name == "remote add" || name == "storage init" || name == "queue scan"
+		if (noSelection || len(m.contextValues()) > 0) && m.openCommand(name) {
+			return nil, true
+		}
+	}
 	switch m.tab {
+	case tabActions:
+		switch key {
+		case "enter":
+			i := m.tbl.Cursor()
+			if i >= 0 && i < len(m.actions) {
+				m.overlay = m.commandForm(m.actions[i], nil)
+			}
+			return nil, true
+		case "/":
+			m.overlay = newForm("Search actions", "Search command names and descriptions; leave empty to show all actions.",
+				[]*field{newField("query", "Search", m.actionsQuery, false, false)}, func(v map[string]string) (tea.Cmd, string) {
+					m.actionsQuery = v["query"]
+					m.tbl.SetCursor(0)
+					m.rebuildTable()
+					return nil, ""
+				})
+			return nil, true
+		case "esc":
+			m.actionsQuery = ""
+			m.rebuildTable()
+			return nil, true
+		}
 	case tabBackups:
 		b, ok := m.selectedBackup()
 		if !ok {
