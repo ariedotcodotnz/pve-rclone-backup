@@ -39,8 +39,10 @@ Proxmox VE installation has. Restores also use the Proxmox VE tools `qmrestore`,
 !!! note "OneDrive limits"
     - A single file in OneDrive can be at most 250 GiB. Archives are uploaded in segments of
       `rclone-segment-size` (1 GiB by default), so archives of any size fit.
-    - Deleted files go to the OneDrive recycle bin and still count towards your quota until it is
-      emptied (after 30 days, or by hand).
+    - Files deleted on OneDrive go to its recycle bin and still count towards your quota until it
+      is emptied (after 30 days, or by hand). Offsite backups that pve-rclone-backup deletes skip
+      the recycle bin unless
+      [`rclone-recycle-bin`](../reference/storage-properties.md#rclone-recycle-bin) is set.
     - OneDrive refresh tokens expire after 90 days without use. A daemon that runs regularly
       renews its token on its own; a token stored only in a recovery kit may expire.
 

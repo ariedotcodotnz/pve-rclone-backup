@@ -39,9 +39,33 @@ Work through these in order:
 
 - **"rejected its credentials"**: the OneDrive token expired or was revoked. Run
   `pve-rclone-backup remote reconnect <remote>`.
-- **"is full"**: OneDrive is out of space. Deleted files stay in the OneDrive recycle bin and
-  count towards the quota; empty it, or delete backups. `pve-rclone-backup remote about <remote>`
-  shows the usage.
+- **"is full"**: OneDrive is out of space. See [OneDrive is full](#onedrive-is-full).
+
+### OneDrive is full
+
+Compare what OneDrive reports with what the offsite backups should take:
+
+```sh
+pve-rclone-backup remote about <remote>                  # total, used, free and recycle bin, live
+pve-rclone-backup backup list --storage offsite --state all
+```
+
+The Proxmox VE storage summary shows the same quota as `remote about`, refreshed every 15 minutes
+([`about-interval`](../reference/daemon-settings.md#about-interval)). Usage covers the whole
+Microsoft account, not only the backups. Space usually goes to:
+
+- **The recycle bin.** Files deleted on OneDrive stay there for up to 30 days and count towards
+  the quota. Before `rclone-recycle-bin` was added, deleted offsite backups went there too. Empty
+  it on the OneDrive website. Microsoft's storage page can take a while to catch up.
+- **No offsite retention.** Without `prune-backups` on the offsite storage, every offsite backup is
+  kept forever. Pruning local backups does not prune offsite ones. See [Retention](retention.md).
+- **Backups waiting to be deleted.** Retention keeps every backup for
+  [`rclone-min-age`](../reference/storage-properties.md#rclone-min-age) and deletes it only after
+  [`rclone-delete-grace`](../reference/storage-properties.md#rclone-delete-grace), 14 days in total
+  by default. `--state tombstoned` lists those marked for deletion.
+- **Uploads that never finished.** `pve-rclone-backup queue list --state failed,cancelled,source_lost`
+  lists them. What they uploaded stays in the cloud but is not listed in Proxmox VE. The
+  `catalogue resynced` line in the daemon log counts them as `incomplete`.
 
 ### Uploads are slow
 

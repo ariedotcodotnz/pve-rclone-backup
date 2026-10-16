@@ -71,8 +71,10 @@ pve-rclone-backup backup undelete offsite:backup/vzdump-qemu-100-2026_10_04-02_0
 Deleting a backup in the Proxmox VE GUI works the same way.
 
 !!! note
-    On OneDrive, deleted files go to the recycle bin and count towards your quota until it is
-    emptied. `pve-rclone-backup remote about` shows the size of the recycle bin.
+    Once the grace period has passed, the backup is deleted permanently and does not go to the
+    OneDrive recycle bin, unless the storage has
+    [`rclone-recycle-bin`](../reference/storage-properties.md#rclone-recycle-bin) set. See
+    [Retention](retention.md#deleted-backups-skip-the-recycle-bin).
 
 A storage with [`rclone-immutable`](../reference/storage-properties.md#rclone-immutable) set to `1`
 refuses every deletion.
