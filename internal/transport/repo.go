@@ -25,7 +25,6 @@ import (
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/obscure"
 	rhash "github.com/rclone/rclone/fs/hash"
-	"github.com/rclone/rclone/fs/operations"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 )
@@ -96,6 +95,27 @@ func OpenCrypt(ctx context.Context, l RepoLocation, g secrets.Generation) (*Targ
 	if err := l.Validate(); err != nil {
 		return nil, err
 	}
+	base := l.Remote + ":" + path.Join(l.Path, CryptRoot(g.ID))
+	recycle, permanent, ok := deletionSpecs(base)
+	if !ok {
+		recycle = base
+	}
+	f, err := openCryptFs(ctx, recycle, g)
+	if err != nil {
+		return nil, fmt.Errorf("transport: open crypt root %s of %s: %w", CryptRoot(g.ID), l.Remote+":"+l.Path, err)
+	}
+	t := targetFromFs(f)
+	if !t.Encrypted() {
+		return nil, errors.New("transport: crypt remote did not open as crypt")
+	}
+	if ok {
+		t.purge = &purger{open: func(ctx context.Context) (fs.Fs, error) { return openCryptFs(ctx, permanent, g) }}
+	}
+	return t, nil
+}
+
+// openCryptFs opens a crypt Fs with the keys of g over the remote base.
+func openCryptFs(ctx context.Context, base string, g secrets.Generation) (fs.Fs, error) {
 	pw, err := obscure.Obscure(g.Password)
 	if err != nil {
 		return nil, err
@@ -108,7 +128,6 @@ func OpenCrypt(ctx context.Context, l RepoLocation, g secrets.Generation) (*Targ
 	if err != nil {
 		return nil, err
 	}
-	base := l.Remote + ":" + path.Join(l.Path, CryptRoot(g.ID))
 	// Named like fs.NewFs names configured-on-the-fly remotes, after a hash
 	// of the location (not of the keys).
 	sum := sha256.Sum256([]byte(base))
@@ -122,15 +141,7 @@ func OpenCrypt(ctx context.Context, l RepoLocation, g secrets.Generation) (*Targ
 		"filename_encoding":         g.FilenameEncoding,
 		"suffix":                    g.Suffix,
 	})
-	f, err := ri.NewFs(ctx, name, "", m)
-	if err != nil {
-		return nil, fmt.Errorf("transport: open crypt root %s of %s: %w", CryptRoot(g.ID), l.Remote+":"+l.Path, err)
-	}
-	t := targetFromFs(f)
-	if !t.Encrypted() {
-		return nil, errors.New("transport: crypt remote did not open as crypt")
-	}
-	return t, nil
+	return ri.NewFs(ctx, name, "", m)
 }
 
 // PutBytes stores a small document (manifest, marker) as one object.
@@ -174,7 +185,7 @@ type Entry struct {
 // fs.ErrorDirNotFound.
 func (t *Target) List(ctx context.Context, dir string) ([]Entry, error) {
 	var entries fs.DirEntries
-	err := t.retryStale(func() (err error) {
+	err := retryStale(t.f, func() (err error) {
 		entries, err = t.f.List(ctx, dir)
 		return err
 	})
@@ -208,9 +219,12 @@ func (t *Target) List(ctx context.Context, dir string) ([]Entry, error) {
 	return out, nil
 }
 
-// Rmdir removes an empty directory.
+// Rmdir removes an empty directory, bypassing the recycle bin like Remove.
 func (t *Target) Rmdir(ctx context.Context, dir string) error {
-	if err := t.retryStale(func() error { return t.f.Rmdir(ctx, dir) }); err != nil {
+	err := t.deleteVia(ctx, func(f fs.Fs) error {
+		return retryStale(f, func() error { return f.Rmdir(ctx, dir) })
+	})
+	if err != nil {
 		return fmt.Errorf("transport: remove directory %q: %w", dir, err)
 	}
 	return nil
@@ -234,7 +248,7 @@ func (t *Target) Probe(ctx context.Context) (*ProbeResult, error) {
 	}
 	got, err := t.ReadAll(ctx, name, 1<<10)
 	rmErr := t.Remove(ctx, name)
-	_ = operations.Rmdirs(ctx, t.f, ".pve-rclone-backup-probe", false)
+	_ = t.Rmdir(ctx, ".pve-rclone-backup-probe")
 	if err != nil {
 		return nil, err
 	}

@@ -98,6 +98,16 @@ func (r *Repo) Target(gen int) (*transport.Target, error) {
 // Base returns the unencrypted repository base target.
 func (r *Repo) Base() *transport.Target { return r.base }
 
+// SetRecycleBin chooses whether deletions in the repository go to the
+// provider's recycle bin or, by default, bypass it where the provider
+// allows (transport.Target.SetRecycleBin).
+func (r *Repo) SetRecycleBin(keep bool) {
+	r.base.SetRecycleBin(keep)
+	for _, t := range r.gens {
+		t.SetRecycleBin(keep)
+	}
+}
+
 func newUUID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)

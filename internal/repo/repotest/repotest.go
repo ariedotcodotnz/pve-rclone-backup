@@ -35,8 +35,10 @@ var Storage = transport.NewMemoryStorage()
 // InitTransport initializes the rclone engine for a test binary; call it
 // from TestMain and run the returned cleanup after the tests.
 func InitTransport() (func(), error) {
+	// Like OneDrive: deletions bypass the recycle bin unless asked not to.
 	transport.RegisterProfile(transport.Profile{Backend: "faulty", MaxPathLength: 4096, MaxNameLength: 255,
-		FilenameEncoding: "base32768", Tested: true})
+		FilenameEncoding: "base32768", RecycleBin: true, PermanentDeleteOption: "hard_delete", LocationOptions: []string{"remote"},
+		Tested: true})
 	dir, err := os.MkdirTemp("", "pve-rclone-backup-repotest-")
 	if err != nil {
 		return nil, err
