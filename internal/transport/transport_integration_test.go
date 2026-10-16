@@ -32,6 +32,9 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	// Like OneDrive: deletions bypass the recycle bin unless asked not to.
+	RegisterProfile(Profile{Backend: "faulty", FilenameEncoding: "base32768", RecycleBin: true, PermanentDeleteOption: "hard_delete",
+		LocationOptions: []string{"remote"}})
 	err = Init(Options{
 		ConfigPath:      filepath.Join(cfgDir, "remotes.conf"),
 		Storage:         testStorage,
