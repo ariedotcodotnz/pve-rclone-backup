@@ -193,6 +193,9 @@ func (m *Manager) Reload(ctx context.Context) error {
 		}
 		e.cfg, e.cfgErr = sc, derr
 		e.enabled = !sc.Base.Disable && (len(sc.Base.Nodes) == 0 || slices.Contains(sc.Base.Nodes, m.opts.Node))
+		if e.repo != nil {
+			e.repo.SetRecycleBin(sc.RecycleBin)
+		}
 		next[sec.ID] = e
 	}
 	removed := []string{}
@@ -450,6 +453,8 @@ func (m *Manager) open(ctx context.Context, e *entry) {
 		m.log.Warn("record repository", "storage", e.id, "err", err)
 	}
 	m.mu.Lock()
+	// The configuration may have changed while the repository opened.
+	r.SetRecycleBin(e.cfg.RecycleBin)
 	e.repo, e.repoUUID, e.generation = r, r.UUID(), r.ActiveGeneration()
 	e.failures, e.nextAttempt = 0, time.Time{}
 	e.health, e.detail = apiv1.HealthOK, ""
