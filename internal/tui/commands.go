@@ -298,7 +298,7 @@ func (o *commandMenu) view(width int, height ...int) string {
 	list := o.matches()
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Actions") + "\n")
-	b.WriteString(fmt.Sprintf("Search: %s  (%d actions)\n\n", cleanLine(o.query), len(list)))
+	fmt.Fprintf(&b, "Search: %s  (%d actions)\n\n", cleanLine(o.query), len(list))
 	n := max(1, dialogHeight(height)-4)
 	start := max(0, min(o.cursor-n+1, len(list)-n))
 	for i := start; i < min(len(list), start+n); i++ {
