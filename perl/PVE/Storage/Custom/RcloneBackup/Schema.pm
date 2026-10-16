@@ -115,6 +115,12 @@ my $properties = {
         maxLength => 128,
         default => 'pve-backups',
     },
+    'rclone-recycle-bin' => {
+        title => 'Use Recycle Bin',
+        description => 'Send deleted offsite backups to the provider\'s recycle bin, where they keep using quota until it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.',
+        type => 'boolean',
+        default => 0,
+    },
     'rclone-remote' => {
         title => 'Remote',
         description => 'Name of the transport remote configured with \'pve-rclone-backup remote add\'.',
@@ -204,6 +210,7 @@ my $options = {
     'rclone-min-age' => { optional => 1 },
     'rclone-min-interval' => { optional => 1 },
     'rclone-path' => { fixed => 1, optional => 1 },
+    'rclone-recycle-bin' => { optional => 1 },
     'rclone-remote' => {},
     'rclone-replicate-from' => { optional => 1 },
     'rclone-segment-size' => { optional => 1 },
@@ -231,6 +238,7 @@ my $advanced = {
     'rclone-max-deletes' => 1,
     'rclone-min-age' => 1,
     'rclone-min-interval' => 1,
+    'rclone-recycle-bin' => 1,
     'rclone-segment-size' => 1,
     'rclone-supersede' => 1,
     'rclone-transfers' => 1,

@@ -67,6 +67,30 @@ pve-rclone-backup backup undelete offsite:backup/vzdump-qemu-100-2026_09_01-02_0
 
 The mark is stored with the backup in the cloud, so the grace period survives the loss of the host.
 
+## Deleted backups skip the recycle bin
+
+OneDrive keeps deleted files in its recycle bin for up to 30 days, and they count towards your quota
+all that time. The grace period already gives you a window to bring a backup back, so once it has
+passed the daemon deletes the backup permanently. It does not end up in the recycle bin.
+
+To keep deleted backups in the recycle bin as well, set
+[`rclone-recycle-bin`](../reference/storage-properties.md#rclone-recycle-bin):
+
+```sh
+pve-rclone-backup storage set offsite rclone-recycle-bin=1
+```
+
+This setting decides on its own: the remote's `hard_delete` option has no effect on deleted backups.
+If OneDrive refuses a permanent deletion, the daemon uses the recycle bin instead and logs a notice.
+
+## How much space offsite backups use
+
+Every vzdump archive is a full backup, so each offsite backup takes about as much space as its
+archive. A backup stays in the cloud until retention removes it, which is at least
+[`rclone-min-age`](../reference/storage-properties.md#rclone-min-age) after it was made (7 days by
+default), and then for the grace period (another 7 days by default). With daily backups that is at
+least 14 backups of each guest, whatever `prune-backups` says. Lower both to free space sooner.
+
 ## Immutable storages
 
 With [`rclone-immutable`](../reference/storage-properties.md#rclone-immutable) set to `1`, the
@@ -75,6 +99,6 @@ storage refuses every deletion and does not apply retention. Storages added by `
 
 !!! note "What rails cannot protect against"
     Anyone with root access to a node, or with your cloud credentials, can still delete offsite
-    backups, for example by changing these settings first. On OneDrive, deleted files stay in the
-    recycle bin for 30 days. Microsoft 365 subscribers can also restore a whole OneDrive to an
-    earlier point within the last 30 days. See the [security model](../reference/security.md).
+    backups, for example by changing these settings first, and OneDrive lets them delete files
+    permanently. Microsoft 365 subscribers can restore a whole OneDrive to an earlier point within
+    the last 30 days. See the [security model](../reference/security.md).

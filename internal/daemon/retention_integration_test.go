@@ -16,11 +16,17 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport/faultfs"
 )
 
 func TestRetention(t *testing.T) {
 	ctx := t.Context()
-	r, _ := repotest.Init(t)
+	ctl := &faultfs.Controller{}
+	loc, _ := repotest.Remote(t, ctl)
+	r, err := repo.Init(ctx, loc, repo.InitOptions{Keys: repotest.NewKeys(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	day := func(d int) time.Time { return time.Date(2026, 10, d, 2, 0, 1, 0, time.Local) }
 	for _, d := range []int{1, 2, 3} {
 		repotest.Write(t, r, repotest.Backup{VMID: 100, Time: day(d), Size: 10})
@@ -83,6 +89,16 @@ func TestRetention(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	// Deleted backups bypass the provider's recycle bin by default.
+	deleted := ctl.Deletions()
+	if len(deleted) == 0 || slices.ContainsFunc(deleted, func(d string) bool { return !strings.HasPrefix(d, "permanent:") }) {
+		t.Fatalf("deletions = %v", deleted)
+	}
+
+	// With rclone-recycle-bin, which applies to the open repository, they
+	// go to the recycle bin.
+	writeStorageCfg(t, e, localSection+section+"\trclone-recycle-bin 1\n\trclone-replicate-from local\n\n")
+	waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return len(s.ReplicateFrom) == 1 })
 
 	// A deletion interrupted by a crash is finished after the next resync.
 	crashed := repotest.Backup{VMID: 300, Size: 10}
@@ -106,10 +122,14 @@ func TestRetention(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	recycled := ctl.Deletions()[len(deleted):]
+	if len(recycled) == 0 || slices.ContainsFunc(recycled, func(d string) bool { return !strings.HasPrefix(d, "recycled:") }) {
+		t.Fatalf("deletions with rclone-recycle-bin = %v", recycled)
+	}
 
 	// An immutable storage previews but never prunes.
-	writeStorageCfg(t, e, localSection+section+"\trclone-immutable 1\n\trclone-replicate-from local\n\n")
-	waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return len(s.ReplicateFrom) == 1 })
+	writeStorageCfg(t, e, localSection+section+"\trclone-immutable 1\n\n")
+	waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return len(s.ReplicateFrom) == 0 })
 	if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/prune", apiv1.PruneRequest{}, nil); !client.IsCode(err, apiv1.CodeImmutable) {
 		t.Fatalf("prune on an immutable storage: %v", err)
 	}
