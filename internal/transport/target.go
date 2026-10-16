@@ -26,18 +26,36 @@ type Target struct {
 	crypt    *crypt.Fs // non-nil when f encrypts
 	base     fs.Fs     // underlying storage Fs
 	baseHash rhash.Type
+	purge    *purger // nil when deletions always use the recycle bin
 }
 
 // NewTarget opens an rclone remote such as "repo-crypt:" or "base:path".
 func NewTarget(ctx context.Context, remote string) (*Target, error) {
-	f, err := fs.NewFs(ctx, remote)
+	recycle, permanent, ok := deletionSpecs(remote)
+	if !ok {
+		recycle = remote
+	}
+	f, err := openFs(ctx, recycle, remote)
+	if err != nil {
+		return nil, err
+	}
+	t := targetFromFs(f)
+	if ok {
+		t.purge = &purger{open: func(ctx context.Context) (fs.Fs, error) { return openFs(ctx, permanent, remote) }}
+	}
+	return t, nil
+}
+
+// openFs opens spec, which is remote with options added.
+func openFs(ctx context.Context, spec, remote string) (fs.Fs, error) {
+	f, err := fs.NewFs(ctx, spec)
 	if err != nil {
 		if errors.Is(err, fs.ErrorIsFile) {
 			return nil, fmt.Errorf("transport: remote %q points at a file, not a directory", remote)
 		}
 		return nil, fmt.Errorf("transport: open remote %q: %w", remote, err)
 	}
-	return targetFromFs(f), nil
+	return f, nil
 }
 
 func targetFromFs(f fs.Fs) *Target {
@@ -110,7 +128,7 @@ func (t *Target) PutSegment(ctx context.Context, remote string, seg Segment, who
 	}
 
 	var dst fs.Object
-	err := t.retryStale(func() (err error) {
+	err := retryStale(t.f, func() (err error) {
 		dst, err = operations.Copy(ctx, t.f, nil, remote, src)
 		return err
 	})
@@ -139,7 +157,7 @@ func (t *Target) PutSegment(ctx context.Context, remote string, seg Segment, who
 		}
 	}
 	if want := t.StoredSize(seg.Size); res.StoredSize != want {
-		_ = dst.Remove(ctx)
+		_ = t.Remove(ctx, remote)
 		return nil, fmt.Errorf("transport: upload %s: stored size %d, want %d", remote, res.StoredSize, want)
 	}
 	if t.baseHash != rhash.None {
@@ -153,7 +171,7 @@ func (t *Target) PutSegment(ctx context.Context, remote string, seg Segment, who
 				return nil, fmt.Errorf("transport: plaintext hash of %s: %w", remote, err)
 			}
 			if local != res.StoredHash {
-				_ = dst.Remove(ctx)
+				_ = t.Remove(ctx, remote)
 				return nil, fmt.Errorf("transport: upload %s corrupted on transfer: %v %q != %q", remote, t.baseHash, local, res.StoredHash)
 			}
 		}
@@ -161,17 +179,17 @@ func (t *Target) PutSegment(ctx context.Context, remote string, seg Segment, who
 	return res, nil
 }
 
-// retryStale runs op and, if it failed because a directory ID cached by
-// rclone is stale, flushes the directory cache and runs op once more.
+// retryStale runs op on f and, if it failed because a directory ID cached
+// by rclone is stale, flushes f's directory cache and runs op once more.
 // Without this, a repository folder deleted or recreated outside this
 // process would break every operation in it until the process restarted.
-func (t *Target) retryStale(op func() error) error {
+func retryStale(f fs.Fs, op func() error) error {
 	err := op()
 	if !staleDirCache(err) {
 		return err
 	}
-	// A crypt target passes the flush on to the backend it wraps.
-	if flush := t.f.Features().DirCacheFlush; flush != nil {
+	// A crypt Fs passes the flush on to the backend it wraps.
+	if flush := f.Features().DirCacheFlush; flush != nil {
 		flush()
 	}
 	return op()
@@ -266,13 +284,17 @@ func (t *Target) Open(ctx context.Context, remote string) (io.ReadCloser, error)
 	return rc, nil
 }
 
-// Remove deletes remote.
+// Remove deletes remote, bypassing the provider's recycle bin unless
+// SetRecycleBin(true) was called (see deleteVia).
 func (t *Target) Remove(ctx context.Context, remote string) error {
-	o, err := t.f.NewObject(ctx, remote)
+	err := t.deleteVia(ctx, func(f fs.Fs) error {
+		o, err := f.NewObject(ctx, remote)
+		if err != nil {
+			return err
+		}
+		return retryStale(f, func() error { return o.Remove(ctx) })
+	})
 	if err != nil {
-		return fmt.Errorf("transport: remove %s: %w", remote, err)
-	}
-	if err := t.retryStale(func() error { return o.Remove(ctx) }); err != nil {
 		return fmt.Errorf("transport: remove %s: %w", remote, err)
 	}
 	return nil
