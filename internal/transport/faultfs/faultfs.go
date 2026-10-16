@@ -9,6 +9,9 @@
 //
 //	faultfs.Register("t1", ctl)
 //	fs.NewFs(ctx, ":faulty,id=t1,remote='/tmp/x':")
+//
+// Like OneDrive, it has an option hard_delete for deletions that bypass a
+// recycle bin; the controller records which kind each deletion was.
 package faultfs
 
 import (
@@ -43,11 +46,33 @@ type Controller struct {
 	// ListError is called before each listing with the attempt number for
 	// that directory (starting at 1); a non-nil error fails the listing.
 	ListError func(dir string, attempt int) error
+	// HardDeleteError is called before each permanent deletion of an
+	// object or directory; a non-nil error fails the deletion.
+	HardDeleteError func(remote string) error
 
-	mu      sync.Mutex
-	puts    map[string]int
-	lists   map[string]int
-	flushes int
+	mu        sync.Mutex
+	puts      map[string]int
+	lists     map[string]int
+	flushes   int
+	deletions []string
+}
+
+// Deletions lists the objects and directories deleted so far, in order,
+// as "permanent:<path>" or "recycled:<path>".
+func (c *Controller) Deletions() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.deletions...)
+}
+
+func (c *Controller) deleted(remote string, permanent bool) {
+	kind := "recycled:"
+	if permanent {
+		kind = "permanent:"
+	}
+	c.mu.Lock()
+	c.deletions = append(c.deletions, kind+remote)
+	c.mu.Unlock()
 }
 
 // Flushes returns how often the directory cache was flushed.
@@ -111,17 +136,19 @@ func init() {
 		Options: []fs.Option{
 			{Name: "remote", Help: "Remote to wrap.", Required: true},
 			{Name: "id", Help: "Controller id.", Required: true},
+			{Name: "hard_delete", Help: "Delete permanently instead of using the recycle bin.", Default: false},
 		},
 	})
 }
 
 // Fs wraps another Fs.
 type Fs struct {
-	name     string
-	root     string
-	wrapped  fs.Fs
-	ctl      *Controller
-	features *fs.Features
+	name       string
+	root       string
+	wrapped    fs.Fs
+	ctl        *Controller
+	features   *fs.Features
+	hardDelete bool
 }
 
 func newFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
@@ -135,7 +162,8 @@ func newFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil && !errors.Is(err, fs.ErrorIsFile) {
 		return nil, err
 	}
-	f := &Fs{name: name, root: root, wrapped: wrapped, ctl: v.(*Controller)}
+	hard, _ := m.Get("hard_delete")
+	f := &Fs{name: name, root: root, wrapped: wrapped, ctl: v.(*Controller), hardDelete: hard == "true"}
 	f.features = (&fs.Features{CanHaveEmptyDirectories: true}).Fill(ctx, f).Mask(ctx, wrapped).WrapsFs(f, wrapped)
 	// Like the backends that cache directory IDs, even over one that does not.
 	f.features.DirCacheFlush = f.DirCacheFlush
@@ -225,7 +253,23 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 }
 
 func (f *Fs) Mkdir(ctx context.Context, dir string) error { return f.wrapped.Mkdir(ctx, dir) }
-func (f *Fs) Rmdir(ctx context.Context, dir string) error { return f.wrapped.Rmdir(ctx, dir) }
+func (f *Fs) Rmdir(ctx context.Context, dir string) error {
+	return f.remove(dir, func() error { return f.wrapped.Rmdir(ctx, dir) })
+}
+
+// remove runs a deletion of remote and records it.
+func (f *Fs) remove(remote string, del func() error) error {
+	if f.hardDelete && f.ctl.HardDeleteError != nil {
+		if err := f.ctl.HardDeleteError(remote); err != nil {
+			return err
+		}
+	}
+	if err := del(); err != nil {
+		return err
+	}
+	f.ctl.deleted(remote, f.hardDelete)
+	return nil
+}
 
 // Object wraps an object of the wrapped Fs.
 type Object struct {
@@ -242,6 +286,10 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		return "0000" + h[4:], nil
 	}
 	return h, err
+}
+
+func (o *Object) Remove(ctx context.Context) error {
+	return o.f.remove(o.Remote(), func() error { return o.Object.Remove(ctx) })
 }
 
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
