@@ -31,6 +31,13 @@ type Profile struct {
 	// RecycleBin means deletions are kept by the provider and may still
 	// count against the quota.
 	RecycleBin bool
+	// PermanentDeleteOption is the boolean backend option that makes
+	// deletions bypass the recycle bin ("" if there is none).
+	PermanentDeleteOption string
+	// LocationOptions are the backend options that select the drive and
+	// the folder paths start from. Targets with a PermanentDeleteOption
+	// fix them when they open (see deletionSpecs).
+	LocationOptions []string
 	// StrictTokenRotation means refresh tokens are single-use, so only one
 	// node may refresh tokens of a remote.
 	StrictTokenRotation bool
@@ -41,7 +48,8 @@ type Profile struct {
 var profiles = map[string]Profile{
 	"onedrive": {
 		Backend: "onedrive", MaxObjectSize: 250 << 30, MaxPathLength: 400, PathCountsUTF16: true,
-		FilenameEncoding: "base32768", RecycleBin: true, Tested: true,
+		FilenameEncoding: "base32768", RecycleBin: true, PermanentDeleteOption: "hard_delete",
+		LocationOptions: []string{"region", "tenant_url", "drive_id", "drive_type", "root_folder_id"}, Tested: true,
 	},
 	"local": {
 		Backend: "local", MaxPathLength: 4096, MaxNameLength: 255, FilenameEncoding: "base32", Tested: true,
