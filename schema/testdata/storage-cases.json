@@ -66,6 +66,10 @@
       "1"
     ],
     [
+      "rclone-recycle-bin",
+      "1"
+    ],
+    [
       "rclone-segment-size",
       "1G"
     ],
@@ -202,6 +206,10 @@
     [
       "rclone-immutable",
       "true"
+    ],
+    [
+      "rclone-recycle-bin",
+      "on"
     ],
     [
       "prune-backups",

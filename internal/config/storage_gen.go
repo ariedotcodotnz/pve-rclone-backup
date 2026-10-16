@@ -59,6 +59,8 @@ type Storage struct {
 	KeepMin int
 	// DeleteGrace (rclone-delete-grace): Deleted offsite backups are kept as tombstones for this long and can be restored.
 	DeleteGrace time.Duration
+	// RecycleBin (rclone-recycle-bin): Send deleted offsite backups to the provider's recycle bin, where they keep using quota until it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.
+	RecycleBin bool
 	// MaxDeletes (rclone-max-deletes): Maximum number of backups a single retention run may delete.
 	MaxDeletes int
 	// Immutable (rclone-immutable): Refuse every deletion of offsite backups.
@@ -69,7 +71,7 @@ type Storage struct {
 }
 
 // storageKeys lists the properties defined by this schema.
-var storageKeys = []string{"rclone-remote", "rclone-path", "rclone-encryption", "rclone-source", "rclone-replicate-from", "rclone-guests", "rclone-tags", "rclone-vmids", "rclone-exclude-vmids", "rclone-backfill", "rclone-min-interval", "rclone-supersede", "rclone-transfers", "rclone-bwlimit", "rclone-segment-size", "rclone-verify-interval", "rclone-verify-content", "rclone-verify-budget", "rclone-min-age", "rclone-keep-min", "rclone-delete-grace", "rclone-max-deletes", "rclone-immutable"}
+var storageKeys = []string{"rclone-remote", "rclone-path", "rclone-encryption", "rclone-source", "rclone-replicate-from", "rclone-guests", "rclone-tags", "rclone-vmids", "rclone-exclude-vmids", "rclone-backfill", "rclone-min-interval", "rclone-supersede", "rclone-transfers", "rclone-bwlimit", "rclone-segment-size", "rclone-verify-interval", "rclone-verify-content", "rclone-verify-budget", "rclone-min-age", "rclone-keep-min", "rclone-delete-grace", "rclone-recycle-bin", "rclone-max-deletes", "rclone-immutable"}
 
 // defaultStorage returns the settings with every default applied.
 func defaultStorage() *Storage {
@@ -89,6 +91,7 @@ func defaultStorage() *Storage {
 		MinAge:         mustDuration("7d"),
 		KeepMin:        1,
 		DeleteGrace:    mustDuration("7d"),
+		RecycleBin:     false,
 		MaxDeletes:     25,
 		Immutable:      false,
 	}
@@ -271,6 +274,14 @@ func decodeStorage(props map[string]Raw, consumed map[string]bool) (*Storage, er
 			fail("rclone-delete-grace", err)
 		} else {
 			c.DeleteGrace = v.Duration
+		}
+	}
+	if r, ok := props["rclone-recycle-bin"]; ok {
+		consumed["rclone-recycle-bin"] = true
+		if v, err := decodeBool(r); err != nil {
+			fail("rclone-recycle-bin", err)
+		} else {
+			c.RecycleBin = v
 		}
 	}
 	if r, ok := props["rclone-max-deletes"]; ok {

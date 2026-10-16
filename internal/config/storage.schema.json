@@ -105,6 +105,13 @@
       "type": "string",
       "x-option": "fixed-optional"
     },
+    "rclone-recycle-bin": {
+      "default": false,
+      "description": "Send deleted offsite backups to the provider's recycle bin, where they keep using quota until it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.",
+      "title": "Use Recycle Bin",
+      "type": "boolean",
+      "x-gui": "advanced"
+    },
     "rclone-remote": {
       "description": "Name of the transport remote configured with 'pve-rclone-backup remote add'.",
       "pattern": "^(?:[a-z][a-z0-9_-]{0,62})$",

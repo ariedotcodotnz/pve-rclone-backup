@@ -204,6 +204,17 @@ properties:
     default: 7d
     gui: advanced
 
+  - key: rclone-recycle-bin
+    field: RecycleBin
+    type: boolean
+    title: Use Recycle Bin
+    description: >-
+      Send deleted offsite backups to the provider's recycle bin, where they keep using quota until
+      it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once
+      rclone-delete-grace has passed.
+    default: false
+    gui: advanced
+
   - key: rclone-max-deletes
     field: MaxDeletes
     type: integer

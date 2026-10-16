@@ -31,6 +31,7 @@ Properties of `rclone-backup` storages in `/etc/pve/storage.cfg`. `pve-rclone-ba
 | [`rclone-min-age`](#rclone-min-age) | `7d` | Retention never deletes offsite backups younger than this. |
 | [`rclone-keep-min`](#rclone-keep-min) | `1` | Retention keeps at least this many complete, verified backups per guest. |
 | [`rclone-delete-grace`](#rclone-delete-grace) | `7d` | Deleted offsite backups are kept as tombstones for this long and can be restored. |
+| [`rclone-recycle-bin`](#rclone-recycle-bin) | `0` | Send deleted offsite backups to the provider's recycle bin, where they keep using quota until it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed. |
 | [`rclone-max-deletes`](#rclone-max-deletes) | `25` | Maximum number of backups a single retention run may delete. |
 | [`rclone-immutable`](#rclone-immutable) | `0` | Refuse every deletion of offsite backups. |
 
@@ -184,6 +185,13 @@ Properties of `rclone-backup` storages in `/etc/pve/storage.cfg`. `pve-rclone-ba
 
 - Value: a duration: a number followed by `s`, `m`, `h`, `d` or `w` (seconds to weeks), such as `7d`.
 - Default: `7d`
+
+## `rclone-recycle-bin`
+
+**Use Recycle Bin.** Send deleted offsite backups to the provider's recycle bin, where they keep using quota until it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.
+
+- Value: `1` (yes) or `0` (no).
+- Default: `0`
 
 ## `rclone-max-deletes`
 
