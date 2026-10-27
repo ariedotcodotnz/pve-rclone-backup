@@ -47,8 +47,12 @@ type Options struct {
 	AboutInterval  time.Duration
 	ResyncInterval time.Duration
 	// OpenTimeout bounds opening a repository and each background
-	// operation (default 2m).
+	// operation other than a resync (default 2m).
 	OpenTimeout time.Duration
+	// ResyncTimeout bounds a catalogue resync (default 1h). A resync reads
+	// every backup's folder and documents one request at a time, which
+	// takes minutes for a large repository or a throttled provider.
+	ResyncTimeout time.Duration
 	// Tick is how often storage.cfg is checked for changes (default 5s).
 	Tick time.Duration
 	// OnChange is called after a storage's state changed.
@@ -113,6 +117,7 @@ func New(opts Options) *Manager {
 	opts.AboutInterval = cmp.Or(opts.AboutInterval, defaults.AboutInterval)
 	opts.ResyncInterval = cmp.Or(opts.ResyncInterval, defaults.CatalogResyncInterval)
 	opts.OpenTimeout = cmp.Or(opts.OpenTimeout, 2*time.Minute)
+	opts.ResyncTimeout = cmp.Or(opts.ResyncTimeout, time.Hour)
 	opts.Tick = cmp.Or(opts.Tick, 5*time.Second)
 	return &Manager{opts: opts, log: opts.Log, wake: make(chan struct{}, 1), entries: map[string]*entry{}}
 }
@@ -469,7 +474,7 @@ func (m *Manager) resync(ctx context.Context, e *entry) {
 	m.mu.Lock()
 	r, source := e.repo, e.cfg.Source
 	m.mu.Unlock()
-	octx, cancel := context.WithTimeout(ctx, m.opts.OpenTimeout)
+	octx, cancel := context.WithTimeout(ctx, m.opts.ResyncTimeout)
 	defer cancel()
 	rep, err := catalog.Resync(octx, m.opts.Store, e.id, r, source)
 	if err != nil {

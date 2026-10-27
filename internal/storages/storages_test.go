@@ -71,6 +71,15 @@ func TestBackoff(t *testing.T) {
 	}
 }
 
+// TestTimeouts: a resync, which reads the whole repository, is not held to
+// the limit of a single background operation.
+func TestTimeouts(t *testing.T) {
+	m := New(Options{})
+	if m.opts.OpenTimeout != 2*time.Minute || m.opts.ResyncTimeout != time.Hour {
+		t.Fatalf("timeouts = %v, %v", m.opts.OpenTimeout, m.opts.ResyncTimeout)
+	}
+}
+
 func TestHealthOf(t *testing.T) {
 	for _, c := range []struct {
 		err  error
