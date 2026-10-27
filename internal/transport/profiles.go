@@ -32,8 +32,10 @@ type Profile struct {
 	// count against the quota.
 	RecycleBin bool
 	// PermanentDeleteOption is the boolean backend option that makes
-	// deletions bypass the recycle bin ("" if there is none).
+	// deletions bypass the recycle bin when true ("" if there is none), or
+	// when false if TrashOption is set (Google Drive's use_trash).
 	PermanentDeleteOption string
+	TrashOption           bool
 	// LocationOptions are the backend options that select the drive and
 	// the folder paths start from. Targets with a PermanentDeleteOption
 	// fix them when they open (see deletionSpecs).
@@ -50,6 +52,14 @@ var profiles = map[string]Profile{
 		Backend: "onedrive", MaxObjectSize: 250 << 30, MaxPathLength: 400, PathCountsUTF16: true,
 		FilenameEncoding: "base32768", RecycleBin: true, PermanentDeleteOption: "hard_delete",
 		LocationOptions: []string{"region", "tenant_url", "drive_id", "drive_type", "root_folder_id"}, Tested: true,
+	},
+	// Google Drive keeps several files of the same name side by side, has no
+	// path length limit and stores up to 5 TiB per file. Trashed files count
+	// against the quota until they are deleted, after 30 days.
+	"drive": {
+		Backend: "drive", MaxObjectSize: 5 << 40, FilenameEncoding: "base64", RecycleBin: true,
+		PermanentDeleteOption: "use_trash", TrashOption: true,
+		LocationOptions: []string{"root_folder_id", "team_drive", "shared_with_me", "impersonate"},
 	},
 	"local": {
 		Backend: "local", MaxPathLength: 4096, MaxNameLength: 255, FilenameEncoding: "base32", Tested: true,
@@ -75,7 +85,7 @@ func RegisterProfile(p Profile) { profiles[p.Backend] = p }
 
 // SetupProviders lists the backends that remote setup offers. Other
 // profiles (local, memory) exist for tests and remotes configured by hand.
-func SetupProviders() []string { return []string{"onedrive"} }
+func SetupProviders() []string { return []string{"onedrive", "drive"} }
 
 // CheckSegmentSize validates a segment size against the profile.
 func (p Profile) CheckSegmentSize(size int64, encrypted bool) error {

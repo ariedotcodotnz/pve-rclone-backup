@@ -129,7 +129,16 @@ func (t *Target) PutSegment(ctx context.Context, remote string, seg Segment, who
 
 	var dst fs.Object
 	err := retryStale(t.f, func() (err error) {
-		dst, err = operations.Copy(ctx, t.f, nil, remote, src)
+		// Where several objects may share a name (Google Drive), a new
+		// upload would add another one beside the object it replaces.
+		var existing fs.Object
+		if t.base.Features().DuplicateFiles {
+			existing, err = t.f.NewObject(ctx, remote)
+			if err != nil && !errors.Is(err, fs.ErrorObjectNotFound) {
+				return err
+			}
+		}
+		dst, err = operations.Copy(ctx, t.f, existing, remote, src)
 		return err
 	})
 	if err != nil {

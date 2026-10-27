@@ -19,6 +19,7 @@ import (
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/lib/pacer"
 	"golang.org/x/oauth2"
+	"google.golang.org/api/googleapi"
 )
 
 // Class is the handling category of a transport error.
@@ -82,8 +83,50 @@ func staleDirCache(err error) bool {
 	if err == nil || errors.Is(err, fs.ErrorObjectNotFound) || errors.Is(err, fs.ErrorDirNotFound) {
 		return false
 	}
-	ae, ok := errors.AsType[*onedriveapi.Error](err)
-	return ok && ae.ErrorInfo.Code == "itemNotFound"
+	if ae, ok := errors.AsType[*onedriveapi.Error](err); ok {
+		return ae.ErrorInfo.Code == "itemNotFound"
+	}
+	// Google Drive addresses everything by ID; rclone looks paths up first.
+	ge, ok := errors.AsType[*googleapi.Error](err)
+	return ok && ge.Code == http.StatusNotFound
+}
+
+// Google Drive error reasons (Errors[].Reason).
+var (
+	googleQuota = []string{"storageQuotaExceeded", "quotaExceeded", "teamDriveFileLimitExceeded", "numChildrenInNonRootLimitExceeded"}
+	// downloadQuotaExceeded limits downloads for up to a day; it says
+	// nothing about storage space.
+	googleThrottle = []string{"rateLimitExceeded", "userRateLimitExceeded", "sharingRateLimitExceeded", "dailyLimitExceeded",
+		"downloadQuotaExceeded"}
+	googleAuth = []string{"authError", "insufficientPermissions"}
+)
+
+// googleReason returns the reasons of a Google API error, space separated.
+func googleReason(ge *googleapi.Error) string {
+	var reasons []string
+	for _, e := range ge.Errors {
+		reasons = append(reasons, e.Reason)
+	}
+	return strings.Join(reasons, " ")
+}
+
+// classifyGoogle classifies a Google API error ("" if it says nothing
+// specific).
+func classifyGoogle(ge *googleapi.Error) Class {
+	reason := googleReason(ge)
+	switch {
+	case ge.Code == http.StatusNotFound:
+		return ClassNotFound
+	case containsAny(reason, googleQuota):
+		return ClassQuota
+	case containsAny(reason, googleThrottle), ge.Code == http.StatusTooManyRequests:
+		return ClassThrottled
+	case ge.Code == http.StatusUnauthorized, containsAny(reason, googleAuth):
+		return ClassAuth
+	case ge.Code >= 500:
+		return ClassTransient
+	}
+	return ""
 }
 
 // Classify maps an error from rclone or this package to a Class.
@@ -130,6 +173,11 @@ func Classify(err error) Class {
 			return ClassThrottled
 		case strings.Contains(code, "pathIsTooLong"), strings.Contains(code, "invalidRequest"):
 			return ClassConfig
+		}
+	}
+	if ge, ok := errors.AsType[*googleapi.Error](err); ok {
+		if c := classifyGoogle(ge); c != "" {
+			return c
 		}
 	}
 	msg := err.Error()

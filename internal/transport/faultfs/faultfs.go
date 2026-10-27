@@ -11,7 +11,10 @@
 //	fs.NewFs(ctx, ":faulty,id=t1,remote='/tmp/x':")
 //
 // Like OneDrive, it has an option hard_delete for deletions that bypass a
-// recycle bin; the controller records which kind each deletion was.
+// recycle bin; the controller records which kind each deletion was. Like
+// Google Drive, with the option duplicate_files it reports that several
+// objects may share a name; the controller records uploads that would have
+// added another object of an existing name.
 package faultfs
 
 import (
@@ -50,11 +53,20 @@ type Controller struct {
 	// object or directory; a non-nil error fails the deletion.
 	HardDeleteError func(remote string) error
 
-	mu        sync.Mutex
-	puts      map[string]int
-	lists     map[string]int
-	flushes   int
-	deletions []string
+	mu         sync.Mutex
+	puts       map[string]int
+	lists      map[string]int
+	flushes    int
+	deletions  []string
+	duplicates []string
+}
+
+// Duplicates lists the uploads that created a second object of an existing
+// name, on a remote with duplicate_files.
+func (c *Controller) Duplicates() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.duplicates...)
 }
 
 // Deletions lists the objects and directories deleted so far, in order,
@@ -137,6 +149,7 @@ func init() {
 			{Name: "remote", Help: "Remote to wrap.", Required: true},
 			{Name: "id", Help: "Controller id.", Required: true},
 			{Name: "hard_delete", Help: "Delete permanently instead of using the recycle bin.", Default: false},
+			{Name: "duplicate_files", Help: "Report that several objects may share a name.", Default: false},
 		},
 	})
 }
@@ -163,8 +176,10 @@ func newFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		return nil, err
 	}
 	hard, _ := m.Get("hard_delete")
+	dup, _ := m.Get("duplicate_files")
 	f := &Fs{name: name, root: root, wrapped: wrapped, ctl: v.(*Controller), hardDelete: hard == "true"}
 	f.features = (&fs.Features{CanHaveEmptyDirectories: true}).Fill(ctx, f).Mask(ctx, wrapped).WrapsFs(f, wrapped)
+	f.features.DuplicateFiles = dup == "true"
 	// Like the backends that cache directory IDs, even over one that does not.
 	f.features.DirCacheFlush = f.DirCacheFlush
 	return f, err
@@ -243,6 +258,13 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 		if err := f.ctl.PutError(remote, attempt); err != nil {
 			_, _ = io.Copy(io.Discard, in)
 			return nil, err
+		}
+	}
+	if f.features.DuplicateFiles {
+		if _, err := f.wrapped.NewObject(ctx, remote); err == nil {
+			f.ctl.mu.Lock()
+			f.ctl.duplicates = append(f.ctl.duplicates, remote)
+			f.ctl.mu.Unlock()
 		}
 	}
 	o, err := f.wrapped.Put(ctx, f.wrapReader(remote, in), src, options...)

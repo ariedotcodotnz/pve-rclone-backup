@@ -295,10 +295,11 @@ type Remote struct {
 	Name        string     `json:"name"`
 	Type        string     `json:"type"`
 	Supported   bool       `json:"supported"`  // this release can use the backend (has a profile)
+	OAuth       bool       `json:"oauth"`      // signs in with OAuth tokens (not a service account)
 	Authorized  bool       `json:"authorized"` // has an OAuth refresh token (OAuth backends)
 	TokenExpiry *time.Time `json:"token_expiry,omitempty"`
-	CustomApp   bool       `json:"custom_app"` // uses its own OAuth client ID
-	DriveType   string     `json:"drive_type,omitempty"`
+	CustomApp   bool       `json:"custom_app"`           // uses its own OAuth client ID
+	DriveType   string     `json:"drive_type,omitempty"` // OneDrive: personal, business...; Google Drive: my_drive or shared_drive
 	DriveID     string     `json:"drive_id,omitempty"`
 	Storages    []string   `json:"storages"` // storages using this remote
 }

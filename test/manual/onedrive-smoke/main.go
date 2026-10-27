@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Command onedrive-smoke is a manual end-to-end check of the embedded rclone
-// transport against a real OneDrive account (milestone M1):
+// transport against a real OneDrive account (milestone M1), or a Google
+// Drive account with -provider drive:
 //
 //   - headless OAuth: the provider URL is printed, you log in on any device,
 //     then paste the address of the "page can't be reached" localhost redirect;
-//   - a crypt remote (base32768 names) is layered on a scratch folder;
+//   - a crypt remote (with the profile's name encoding) is layered on a scratch folder;
 //   - a random file is uploaded as segments, verified via the provider's
-//     QuickXorHash without downloading, downloaded, compared and deleted.
+//     hash (QuickXorHash, MD5) without downloading, downloaded, compared and
+//     deleted.
 //
 // Nothing is written to disk except a temporary source file. Deleted test
-// objects end up in the OneDrive recycle bin.
+// objects end up in the recycle bin (OneDrive) or trash (Google Drive).
 //
 //	go run ./test/manual/onedrive-smoke -size 64M -segment 16M
+//	go run ./test/manual/onedrive-smoke -provider drive -client-id <id> -client-secret <secret>
 package main
 
 import (
@@ -45,14 +48,15 @@ func main() {
 	segment := fs.SizeSuffix(16 << 20)
 	flag.Var(&size, "size", "test file size")
 	flag.Var(&segment, "segment", "segment size")
-	path := flag.String("path", "pve-rclone-backup-smoke", "scratch folder in OneDrive (deleted afterwards)")
-	clientID := flag.String("client-id", "", "own Azure app client ID (optional)")
-	clientSecret := flag.String("client-secret", "", "own Azure app client secret (optional)")
+	provider := flag.String("provider", "onedrive", "onedrive or drive (Google Drive)")
+	path := flag.String("path", "pve-rclone-backup-smoke", "scratch folder in the cloud (deleted afterwards)")
+	clientID := flag.String("client-id", "", "own Microsoft or Google app client ID (optional)")
+	clientSecret := flag.String("client-secret", "", "own Microsoft or Google app client secret (optional)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := run(ctx, int64(size), int64(segment), *path, *clientID, *clientSecret); err != nil {
+	if err := run(ctx, *provider, int64(size), int64(segment), *path, *clientID, *clientSecret); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
 	}
@@ -70,7 +74,11 @@ func ask(prompt string) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-func run(ctx context.Context, size, segSize int64, path, clientID, clientSecret string) error {
+func run(ctx context.Context, provider string, size, segSize int64, path, clientID, clientSecret string) error {
+	profile, err := transport.ProfileFor(provider)
+	if err != nil {
+		return err
+	}
 	tmp, err := os.MkdirTemp("", "onedrive-smoke-")
 	if err != nil {
 		return err
@@ -88,8 +96,8 @@ func run(ctx context.Context, size, segSize int64, path, clientID, clientSecret 
 		params["client_id"] = clientID
 		params["client_secret"] = clientSecret
 	}
-	if err := configureRemote(ctx, "od", "onedrive", params); err != nil {
-		return fmt.Errorf("configure OneDrive: %w", err)
+	if err := configureRemote(ctx, "od", provider, params); err != nil {
+		return fmt.Errorf("configure %s: %w", provider, err)
 	}
 
 	store.SetSection("od-crypt", map[string]string{
@@ -99,7 +107,7 @@ func run(ctx context.Context, size, segSize int64, path, clientID, clientSecret 
 		"password2":                 obscure.MustObscure(rand.Text()),
 		"filename_encryption":       "standard",
 		"directory_name_encryption": "true",
-		"filename_encoding":         "base32768",
+		"filename_encoding":         profile.FilenameEncoding,
 	})
 	tgt, err := transport.NewTarget(ctx, "od-crypt:")
 	if err != nil {
@@ -133,7 +141,7 @@ func run(ctx context.Context, size, segSize int64, path, clientID, clientSecret 
 				fmt.Println("cleanup:", err)
 			}
 		}
-		fmt.Printf("cleanup done; remove the empty folder %q (and recycle bin items) in OneDrive if desired\n", path)
+		fmt.Printf("cleanup done; remove the empty folder %q (and recycle bin or trash items) in the cloud if desired\n", path)
 	}()
 	start := time.Now()
 	for i := range count {

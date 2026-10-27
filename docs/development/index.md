@@ -33,6 +33,15 @@ make deb-test      # install, use and purge the package in a container
 make e2e           # end-to-end tests on a nested Proxmox VE node
 ```
 
+Run `make lint` before you push. CI runs it as its own job, and a lint failure marks the whole run
+as failed even though the package job succeeds. The
+[development build download](../getting-started/installation.md#a-development-build) only takes
+successful runs, so it then keeps offering the previous commit's package.
+
+If `go` is not on your `PATH` (for example, a toolchain unpacked under `~/sdk`), put it there for
+the build: `PATH=$HOME/sdk/go<version>/bin:$PATH make deb`. `make lint` also needs
+`golangci-lint`, which `go install` puts in `~/go/bin`.
+
 ### End-to-end tests
 
 `make e2e` installs Proxmox VE 9.2 unattended from the official ISO into a nested VM. It then

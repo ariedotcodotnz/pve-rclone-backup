@@ -27,8 +27,10 @@ The crypt passwords in the JSON are plain text. Write them into `rclone.conf` wi
 `rclone obscure <password>`.
 
 Add the printed sections to `~/.config/rclone/rclone.conf`. If the kit holds no credentials, create
-the transport remote with `rclone config` under the name the kit shows. Each repository has one
-crypt remote per key generation, named `<remote>-g<N>`:
+the transport remote with `rclone config` under the name the kit shows: storage type `onedrive` or
+`drive` (Google Drive, with the full `drive` scope). Each repository has one crypt remote per key
+generation, named `<remote>-g<N>`. Repositories on Google Drive use `filename_encoding = base64`; the
+kit lists each one's settings.
 
 ```ini
 [onedrive-main-g1]

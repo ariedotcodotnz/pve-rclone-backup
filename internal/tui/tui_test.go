@@ -245,7 +245,7 @@ func TestRemoteSetupWizard(t *testing.T) {
 	r["POST /v1/remote-setup"] = func(w http.ResponseWriter, req *http.Request) error {
 		var sr apiv1.RemoteSetupRequest
 		_ = api.DecodeJSON(req, &sr)
-		if sr.Name != "od2" || sr.Params["client_id"] != "app" {
+		if sr.Name != "od2" || sr.Provider != "drive" || sr.Params["client_id"] != "app" {
 			return api.Invalid("request %+v", sr)
 		}
 		return api.WriteJSON(w, 200, apiv1.RemoteSetup{ID: "s1", Name: "od2", Status: apiv1.SetupQuestion, State: "q1",
@@ -267,9 +267,10 @@ func TestRemoteSetupWizard(t *testing.T) {
 	m := newModel(t, f)
 	press(t, m, "4", "a")
 	fm := m.overlay.(*form)
-	fm.fields[0].input.SetValue("od2")
-	fm.fields[1].input.SetValue("app")
-	press(t, m, "enter", "enter", "enter")
+	fm.fields[0].input.SetValue("drive")
+	fm.fields[1].input.SetValue("od2")
+	fm.fields[2].input.SetValue("app")
+	press(t, m, "enter", "enter", "enter", "enter")
 	fm, ok := m.overlay.(*form)
 	if !ok || !strings.Contains(fm.view(100), "https://login.example/a?state=x") {
 		t.Fatalf("authorization step: %#v", m.overlay)

@@ -250,7 +250,7 @@ Restoring on a new Proxmox VE host:
 Restoring without pve-rclone-backup (stock rclone 1.62 or newer):
   1. Decode the payload below: pve-rclone-backup recovery-kit show <this file>,
      or base64-decode it (unencrypted kits) to get JSON with the crypt keys.
-  2. rclone config: create the transport remote (e.g. OneDrive), then a crypt
+  2. rclone config: create the transport remote (OneDrive or Google Drive), then a crypt
      remote with remote=<transport>:<path>/g<generation>, the two passwords,
      and the filename settings listed above.
   3. rclone lsf -R <crypt>:v1/<source>/

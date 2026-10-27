@@ -28,8 +28,8 @@ flowchart TB
     st2 -. "lists" .-> src2
 ```
 
-- A **remote** is a cloud account the daemon can reach, such as a OneDrive account you signed in
-  to. Its credentials are stored in `/etc/pve/priv/pve-rclone-backup/remotes.conf`, readable only by
+- A **remote** is a cloud account the daemon can reach, such as a OneDrive or Google Drive account
+  you signed in to. Its credentials are stored in `/etc/pve/priv/pve-rclone-backup/remotes.conf`, readable only by
   root.
 - A **repository** is a folder in a remote that holds offsite backups. By default it is encrypted,
   with random keys of its own.

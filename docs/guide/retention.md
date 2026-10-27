@@ -69,8 +69,8 @@ The mark is stored with the backup in the cloud, so the grace period survives th
 
 ## Deleted backups skip the recycle bin
 
-OneDrive keeps deleted files in its recycle bin for up to 30 days, and they count towards your quota
-all that time. The grace period already gives you a window to bring a backup back, so once it has
+OneDrive keeps deleted files in its recycle bin, and Google Drive in its trash, for up to 30 days,
+and they count towards your quota all that time. The grace period already gives you a window to bring a backup back, so once it has
 passed the daemon deletes the backup permanently. It does not end up in the recycle bin.
 
 To keep deleted backups in the recycle bin as well, set
@@ -80,8 +80,10 @@ To keep deleted backups in the recycle bin as well, set
 pve-rclone-backup storage set offsite rclone-recycle-bin=1
 ```
 
-This setting decides on its own: the remote's `hard_delete` option has no effect on deleted backups.
-If OneDrive refuses a permanent deletion, the daemon uses the recycle bin instead and logs a notice.
+This setting decides on its own: the remote's own option for it (`hard_delete` on OneDrive,
+`use_trash` on Google Drive) has no effect on deleted backups. If the provider refuses a permanent
+deletion, as Google does for members of a shared drive who are not managers, the daemon uses the
+recycle bin instead and logs a notice.
 
 ## How much space offsite backups use
 
@@ -99,6 +101,6 @@ storage refuses every deletion and does not apply retention. Storages added by `
 
 !!! note "What rails cannot protect against"
     Anyone with root access to a node, or with your cloud credentials, can still delete offsite
-    backups, for example by changing these settings first, and OneDrive lets them delete files
-    permanently. Microsoft 365 subscribers can restore a whole OneDrive to an earlier point within
+    backups, for example by changing these settings first, and OneDrive and Google Drive let them
+    delete files permanently. Microsoft 365 subscribers can restore a whole OneDrive to an earlier point within
     the last 30 days. See the [security model](../reference/security.md).

@@ -19,6 +19,7 @@ import (
 	"maps"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -128,8 +129,20 @@ func (m *Manager) Get(name string) (apiv1.Remote, error) {
 func view(name string, users []string) apiv1.Remote {
 	data := config.LoadedData()
 	get := func(k string) string { v, _ := data.GetValue(name, k); return v }
-	r := apiv1.Remote{Name: name, Type: get("type"), DriveType: get("drive_type"), DriveID: get("drive_id"),
-		CustomApp: get("client_id") != "", Storages: append([]string{}, users...)}
+	r := apiv1.Remote{Name: name, Type: get("type"), CustomApp: get("client_id") != "", Storages: append([]string{}, users...)}
+	switch r.Type {
+	case "onedrive":
+		r.OAuth, r.DriveType, r.DriveID = true, get("drive_type"), get("drive_id")
+	case "drive":
+		// rclone signs in with a service account or, with env_auth, with
+		// the host's application default credentials before using a token.
+		envAuth, _ := strconv.ParseBool(get("env_auth"))
+		r.OAuth = get("service_account_file") == "" && get("service_account_credentials") == "" && !envAuth
+		r.DriveType = "my_drive"
+		if r.DriveID = get("team_drive"); r.DriveID != "" {
+			r.DriveType = "shared_drive"
+		}
+	}
 	_, err := transport.ProfileFor(r.Type)
 	r.Supported = err == nil
 	if tok := get("token"); tok != "" {

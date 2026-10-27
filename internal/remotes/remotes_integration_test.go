@@ -302,7 +302,73 @@ func TestListDeleteTest(t *testing.T) {
 	if err := m.Delete(other.Remote); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: %v", err)
 	}
-	if len(Providers()) != 1 || Providers()[0].Name != "onedrive" || !Providers()[0].RecycleBin {
-		t.Fatalf("providers = %+v", Providers())
+	if p := Providers(); len(p) != 2 || p[0].Name != "onedrive" || p[1].Name != "drive" || !p[0].RecycleBin || !p[1].RecycleBin {
+		t.Fatalf("providers = %+v", p)
+	}
+}
+
+func TestGoogleDriveSetupWithRelay(t *testing.T) {
+	lockOAuthPort(t)
+	srv, code := fakeProvider(t)
+	m := newManager(nil)
+	ctx := t.Context()
+
+	s, err := m.Start(ctx, apiv1.RemoteSetupRequest{Name: "gd", Provider: "drive", Params: oauthParams(srv)}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status == apiv1.SetupQuestion && s.Option != nil && s.Option.Name == "config_is_local" {
+		if s, err = m.Answer(ctx, s.ID, apiv1.RemoteSetupAnswer{State: s.State, Result: "true"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.Status != apiv1.SetupAuthorizing || !strings.HasPrefix(s.AuthURL, srv.URL+"/authorize?") {
+		t.Fatalf("authorization step = %+v", s)
+	}
+	u, _ := url.Parse(s.AuthURL)
+	// Google redirects to 127.0.0.1 rather than localhost.
+	s, err = m.Redirect(ctx, s.ID, "http://127.0.0.1:53682/?code=the-code&state="+url.QueryEscape(u.Query().Get("state")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status != apiv1.SetupQuestion || s.Option == nil || s.Option.Name != "config_change_team_drive" || *code != "the-code" {
+		t.Fatalf("after authorization = %+v (code %q)", s, *code)
+	}
+	if s, err = m.Answer(ctx, s.ID, apiv1.RemoteSetupAnswer{State: s.State, Result: "false"}); err != nil || s.Status != apiv1.SetupDone {
+		t.Fatalf("after declining a shared drive = %+v, %v", s, err)
+	}
+	r, err := m.Get("gd")
+	if err != nil || !r.OAuth || !r.Authorized || r.DriveType != "my_drive" || r.Type != "drive" {
+		t.Fatalf("remote = %+v, %v", r, err)
+	}
+	if err := m.Finish(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Delete("gd"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGoogleDriveCredentials: only remotes that sign in with a token need
+// one to be authorized.
+func TestGoogleDriveCredentials(t *testing.T) {
+	m := newManager(nil)
+	data := config.LoadedData()
+	for name, c := range map[string]struct {
+		key, value string
+		oauth      bool
+	}{
+		"gd-token":   {"env_auth", "false", true},
+		"gd-file":    {"service_account_file", "/etc/sa.json", false},
+		"gd-inline":  {"service_account_credentials", "{}", false},
+		"gd-runtime": {"env_auth", "true", false},
+	} {
+		data.SetValue(name, "type", "drive")
+		data.SetValue(name, c.key, c.value)
+		t.Cleanup(func() { data.DeleteSection(name) })
+		r, err := m.Get(name)
+		if err != nil || r.OAuth != c.oauth || r.Authorized {
+			t.Errorf("%s: remote = %+v, %v", name, r, err)
+		}
 	}
 }

@@ -1,13 +1,13 @@
 # pve-rclone-backup
 
-pve-rclone-backup copies your Proxmox VE backups offsite to cloud storage, using rclone. The first
-supported cloud is Microsoft OneDrive Personal.
+pve-rclone-backup copies your Proxmox VE backups offsite to cloud storage, using rclone. The supported
+clouds are Microsoft OneDrive and Google Drive.
 
 !!! warning "Pre-alpha"
     Replication, verification, retention, fetch and restore all work through the command line and
     the terminal interface, and an installable package is available. Each change is tested on a
     nested Proxmox VE 9.2 node. pve-rclone-backup has **not yet been tested against a real OneDrive
-    account**. Keep your local backups, and test restores before you rely on it.
+    or Google Drive account**. Keep your local backups, and test restores before you rely on it.
 
 ## What it does
 
@@ -29,7 +29,7 @@ supported cloud is Microsoft OneDrive Personal.
 flowchart LR
     vzdump["vzdump<br/>(backup jobs)"] --> local[("Local backup storage<br/>vzdump-*.vma.zst")]
     local -- "finished archives" --> daemon["pve-rclone-backupd"]
-    daemon -- "encrypted segments" --> cloud[("OneDrive")]
+    daemon -- "encrypted segments" --> cloud[("OneDrive or Google Drive")]
     daemon --- catalogue[("Catalogue")]
     pve["Proxmox VE GUI<br/>pvesm, pvesh"] -- "rclone-backup storage" --> catalogue
     cli["pve-rclone-backup<br/>CLI and TUI"] --> daemon

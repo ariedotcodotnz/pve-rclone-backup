@@ -3,6 +3,7 @@
 package transport
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -51,5 +52,25 @@ func TestOneDrivePathBudget(t *testing.T) {
 	local, _ := ProfileFor("local")
 	if err := local.CheckPath("/x", strings.Repeat("n", 300), ""); err == nil {
 		t.Fatal("over-long local name accepted")
+	}
+}
+
+func TestGoogleDriveProfile(t *testing.T) {
+	gd, err := ProfileFor("drive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := "v1/" + strings.Repeat("s", 32) + "/qemu/999999999/2026_10_04-02_00_01.12/" + strings.Repeat("x", 200)
+	if err := gd.CheckPath(strings.Repeat("deep/", 30)+"g1", long, gd.FilenameEncoding); err != nil {
+		t.Fatalf("Google Drive has no path limit: %v", err)
+	}
+	if err := gd.CheckSegmentSize(1<<30, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := gd.CheckSegmentSize(5<<40, true); err == nil {
+		t.Fatal("segment above the 5 TiB object limit accepted once encrypted")
+	}
+	if !slices.Contains(SetupProviders(), "drive") || !gd.RecycleBin || !gd.TrashOption {
+		t.Fatalf("profile = %+v", gd)
 	}
 }

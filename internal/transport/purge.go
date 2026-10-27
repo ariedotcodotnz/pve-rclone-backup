@@ -5,12 +5,14 @@ package transport
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	onedriveapi "github.com/rclone/rclone/backend/onedrive/api"
 	"github.com/rclone/rclone/fs"
+	"google.golang.org/api/googleapi"
 )
 
 // Providers such as OneDrive move deleted files to a recycle bin, where
@@ -32,8 +34,8 @@ type purger struct {
 }
 
 // deletionSpecs returns remote ("name:path") with the backend's
-// permanent-delete option set to false (recycle) and to true (permanent),
-// if the backend of the configured remote name has one. Both fix the
+// permanent-delete option set to delete into the recycle bin and to delete
+// permanently, if the backend of the configured remote name has one. Both fix the
 // backend's location options at their current values: the twin opens on
 // first use, and must delete from the drive and folder the target opened
 // even if the remote has been reconnected to another one since.
@@ -63,6 +65,9 @@ func deletionSpecs(remote string) (recycle, permanent string, ok bool) {
 		pinned += "," + key + "=" + connectionValue(v)
 	}
 	pinned += "," + prof.PermanentDeleteOption + "="
+	if prof.TrashOption {
+		return pinned + "true:" + p, pinned + "false:" + p, true
+	}
 	return pinned + "false:" + p, pinned + "true:" + p, true
 }
 
@@ -143,6 +148,12 @@ func (t *Target) purgeFs(ctx context.Context) (fs.Fs, error) {
 // not supported, rather than that the item is missing, the remote is
 // throttled or full.
 func permanentDeleteRefused(err error) bool {
+	if ge, ok := errors.AsType[*googleapi.Error](err); ok {
+		// Such as insufficientFilePermissions: in a shared drive, only
+		// managers may delete permanently. A 403 also reports rate limits.
+		return (ge.Code == http.StatusForbidden && classifyGoogle(ge) == "") ||
+			ge.Code == http.StatusMethodNotAllowed || ge.Code == http.StatusNotImplemented
+	}
 	ae, ok := errors.AsType[*onedriveapi.Error](err)
 	if !ok {
 		return false

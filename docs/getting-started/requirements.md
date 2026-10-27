@@ -28,13 +28,16 @@ Proxmox VE installation has. Restores also use the Proxmox VE tools `qmrestore`,
 
 ## Cloud storage
 
-- A **Microsoft OneDrive** account. pve-rclone-backup is developed for OneDrive Personal; it uses
-  rclone's OneDrive support, which also covers OneDrive for Business and SharePoint document
-  libraries.
+- A **Microsoft OneDrive** or **Google Drive** account. pve-rclone-backup is developed for
+  OneDrive Personal; it uses rclone's OneDrive support, which also covers OneDrive for Business and
+  SharePoint document libraries. Google Drive covers personal accounts and the shared drives of
+  Google Workspace.
 - Enough free space for your offsite backups. Each backup is stored once, at the size of its
   compressed archive plus less than 0.03% for encryption.
 - **Optional, but recommended:** your own Microsoft app registration (a client ID and secret).
-  Without one, the account uses rclone's shared app, which Microsoft throttles more often.
+  Without one, the account uses rclone's shared app, which Microsoft throttles more often. For
+  Google Drive, your own Google app is all but required; see
+  [Your own Google app](../guide/remotes.md#your-own-google-app).
 
 !!! note "OneDrive limits"
     - A single file in OneDrive can be at most 250 GiB. Archives are uploaded in segments of
@@ -46,13 +49,22 @@ Proxmox VE installation has. Restores also use the Proxmox VE tools `qmrestore`,
     - OneDrive refresh tokens expire after 90 days without use. A daemon that runs regularly
       renews its token on its own; a token stored only in a recovery kit may expire.
 
+!!! note "Google Drive limits"
+    - Google accepts at most 750 GB of uploads per account and day; uploads beyond that wait for
+      the next day. A single file can be at most 5 TiB.
+    - Deleted files stay in the trash for 30 days and count towards the quota, which Gmail and
+      Google Photos share. Offsite backups that pve-rclone-backup deletes skip the trash unless
+      `rclone-recycle-bin` is set.
+    - Google sign-ins expire after 6 months without use, and after 7 days while your Google app
+      is in testing. See [Remotes](../guide/remotes.md#what-to-know-about-google-drive).
+
 ## Network
 
 The daemon needs outbound HTTPS to the cloud provider. It opens no network ports: the command line
 tool, the terminal interface and the Proxmox VE plugin talk to it through a local socket that only
 root can use.
 
-Signing in to OneDrive does not need a browser on the Proxmox VE host. You open a sign-in address on
+Signing in to OneDrive or Google Drive does not need a browser on the Proxmox VE host. You open a sign-in address on
 any device and paste the result back. See [Remotes](../guide/remotes.md).
 
 ## Local disk

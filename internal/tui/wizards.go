@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -22,15 +23,21 @@ import (
 
 func yes(v string) bool { return strings.EqualFold(v, "y") || strings.EqualFold(v, "yes") }
 
-// remoteAddForm starts configuring a OneDrive remote.
+// remoteAddForm starts configuring a OneDrive or Google Drive remote.
 func (m *Model) remoteAddForm() overlay {
-	return newForm("Add a OneDrive remote",
+	return newForm("Add a remote",
 		"Leave the client ID empty to use rclone's shared app; your own app registration avoids throttling.",
 		[]*field{
-			newField("name", "Remote name", "onedrive", true, false),
+			newField("provider", "Provider (onedrive or drive for Google Drive)", "onedrive", true, false),
+			newField("name", "Remote name (default: the provider)", "", false, false),
 			newField("client_id", "OAuth client ID (optional)", "", false, false),
 			newField("client_secret", "OAuth client secret (optional)", "", false, true),
 		}, func(v map[string]string) (tea.Cmd, string) {
+			provider := strings.ToLower(strings.TrimSpace(v["provider"]))
+			if provider != "onedrive" && provider != "drive" {
+				return nil, "the provider is onedrive or drive"
+			}
+			name := cmp.Or(strings.TrimSpace(v["name"]), provider)
 			params := map[string]string{}
 			if v["client_id"] != "" {
 				params["client_id"] = v["client_id"]
@@ -39,7 +46,7 @@ func (m *Model) remoteAddForm() overlay {
 				params["client_secret"] = v["client_secret"]
 			}
 			return m.startSetup(http.MethodPost, "/v1/remote-setup",
-				apiv1.RemoteSetupRequest{Name: v["name"], Provider: "onedrive", Params: params}), ""
+				apiv1.RemoteSetupRequest{Name: name, Provider: provider, Params: params}), ""
 		})
 }
 

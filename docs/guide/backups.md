@@ -72,7 +72,7 @@ Deleting a backup in the Proxmox VE GUI works the same way.
 
 !!! note
     Once the grace period has passed, the backup is deleted permanently and does not go to the
-    OneDrive recycle bin, unless the storage has
+    provider's recycle bin, unless the storage has
     [`rclone-recycle-bin`](../reference/storage-properties.md#rclone-recycle-bin) set. See
     [Retention](retention.md#deleted-backups-skip-the-recycle-bin).
 

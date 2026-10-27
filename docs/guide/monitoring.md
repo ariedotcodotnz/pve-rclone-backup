@@ -45,7 +45,7 @@ The daemon raises alerts for problems that need you, and clears them when the pr
 | Alert | Raised when | What to do |
 |---|---|---|
 | `auth:<remote>` | The remote rejected its credentials. Uploads to it are paused. | `pve-rclone-backup remote reconnect <remote>` |
-| `quota:<remote>` | The remote is full. Uploads to it are paused. | Free space; see [OneDrive is full](troubleshooting.md#onedrive-is-full). |
+| `quota:<remote>` | The remote is full. Uploads to it are paused. | Free space; see [The cloud storage is full](troubleshooting.md#the-cloud-storage-is-full). |
 | `stalled:<job>` | An upload has been failing for more than a day. | `pve-rclone-backup queue show <job>` shows the error. |
 | `damaged:<storage>` | Verification found damaged backups. | See [damaged backups](verification.md#damaged-backups). |
 | `damaged:<storage>:<backup>` | A content verification of a backup failed. | As above. |

@@ -117,7 +117,7 @@ my $properties = {
     },
     'rclone-recycle-bin' => {
         title => 'Use Recycle Bin',
-        description => 'Send deleted offsite backups to the provider\'s recycle bin, where they keep using quota until it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.',
+        description => 'Send deleted offsite backups to the provider\'s recycle bin, where they keep using quota until it is emptied (OneDrive and Google Drive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.',
         type => 'boolean',
         default => 0,
     },

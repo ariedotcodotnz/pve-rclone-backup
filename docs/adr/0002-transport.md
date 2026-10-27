@@ -63,6 +63,25 @@ things before we commit to that:
 
 **Go.** Embedding rclone v1.75.x as a library is confirmed as the transport. Fallback, which was not needed: a bundled `rclone rcd` plus chunker, accepting the loss of cross-run resume.
 
+## Addendum: Google Drive (2026-10)
+
+Google Drive is the second backend with a profile (`drive`, rclone v1.75.1). It differs from
+OneDrive in ways the transport has to handle:
+
+| Difference | Handling |
+|---|---|
+| Several files may share a name in one folder (`Features().DuplicateFiles`). A plain upload to an existing path adds a second file. | `PutSegment` looks the object up first on such backends and updates it, so rewritten documents stay unique. Covered by a fault-injection test. |
+| The trash option is inverted: `use_trash=false` deletes permanently, where OneDrive has `hard_delete=true`. | `Profile.TrashOption` inverts the value in `deletionSpecs`. |
+| Errors are `*googleapi.Error` with HTTP codes and reasons; rate limits are 403 as well as 429. | Classified by reason: `storageQuotaExceeded` is quota, `userRateLimitExceeded` and `rateLimitExceeded` are throttling, 401 is auth, 404 is not found (and a stale directory ID). A 403 that is none of these refuses a permanent deletion. |
+| 750 GB of uploads per account and day; beyond it, `userRateLimitExceeded`. | Throttled and retried; documented. |
+| No path length limit; 5 TiB per file. | Profile without a path limit; crypt names use base64, the most compact encoding in bytes. |
+| The location is selected by `root_folder_id`, `team_drive`, `shared_with_me` and `impersonate`. | These are the profile's location options. |
+
+Remote setup is the same relay: rclone's Google client redirects to `http://127.0.0.1:53682/`,
+which `RelayRedirect` accepts. After the token, rclone asks whether to use a shared drive. Both are
+covered by an integration test against a fake OAuth provider. A real account has not been tested
+yet: `go run ./test/manual/onedrive-smoke -provider drive` does that interactively.
+
 ## Follow-ups (M7/M8)
 
 - **pmxcfs-backed `config.Storage`:** atomic writes under a cfs lock, and Load semantics per finding 6.

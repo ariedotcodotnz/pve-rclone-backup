@@ -206,6 +206,24 @@ func TestDeletionSpecs(t *testing.T) {
 			t.Errorf("spec %s = %+v", spec, p)
 		}
 	}
+	gd := fmt.Sprintf("gd%d", time.Now().UnixNano())
+	testStorage.SetSection(gd, map[string]string{"type": "drive", "team_drive": "0Abc", "use_trash": "false"})
+	recycle, permanent, ok = deletionSpecs(gd + ":pve backups")
+	if !ok {
+		t.Fatal("no specs for Google Drive")
+	}
+	// use_trash keeps deletions in the trash when true.
+	for spec, useTrash := range map[string]string{recycle: "true", permanent: "false"} {
+		p, err := fspath.Parse(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := configmap.Simple{"root_folder_id": "", "team_drive": "0Abc", "shared_with_me": "false", "impersonate": "",
+			"use_trash": useTrash}
+		if p.Name != gd || p.Path != "pve backups" || !maps.Equal(p.Config, want) {
+			t.Errorf("spec %s = %+v", spec, p)
+		}
+	}
 	for _, remote := range []string{local + ":/srv/x", ":faulty,id=x,remote=/tmp:", "missing" + od + ":x", od} {
 		if recycle, permanent, ok := deletionSpecs(remote); ok {
 			t.Errorf("deletionSpecs(%q) = %q, %q", remote, recycle, permanent)

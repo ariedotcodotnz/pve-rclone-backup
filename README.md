@@ -1,14 +1,14 @@
 # pve-rclone-backup
 
 Offsite replication of Proxmox VE backups to rclone-supported cloud storage.
-Microsoft OneDrive Personal is the first target.
+Microsoft OneDrive and Google Drive are supported.
 
 **Documentation: <https://ariedotcodotnz.github.io/pve-rclone-backup/>**
 
 > **Status: pre-alpha, under active development.** Replication, verification, retention, fetch and
 > restore work through the CLI and the TUI, and `make deb` builds an installable package. It passes
 > an end-to-end suite on a nested Proxmox VE 9.2 node (`make e2e`). It has not yet been tested
-> against a real OneDrive account.
+> against a real OneDrive or Google Drive account.
 
 ## How it works
 

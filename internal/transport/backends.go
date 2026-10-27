@@ -6,6 +6,7 @@ package transport
 // without a capability profile and tests (see ADR 0002).
 import (
 	_ "github.com/rclone/rclone/backend/crypt"
+	_ "github.com/rclone/rclone/backend/drive"
 	_ "github.com/rclone/rclone/backend/local"
 	_ "github.com/rclone/rclone/backend/onedrive"
 )

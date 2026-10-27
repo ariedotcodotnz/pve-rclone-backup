@@ -30,7 +30,7 @@ func (a *App) remoteCommand() *cobra.Command {
 			rows := make([][]string, 0, len(list))
 			for _, r := range list {
 				auth := "-"
-				if r.Type == "onedrive" {
+				if r.OAuth {
 					auth = yesNo(r.Authorized)
 				}
 				rows = append(rows, []string{r.Name, r.Type, auth, dash(r.DriveType), dash(strings.Join(r.Storages, ","))})
@@ -134,13 +134,15 @@ func (a *App) remoteAddCommand() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "add <remote>",
-		Short: "Configure a new remote (OneDrive)",
-		Long: `Configure a new transport remote. For OneDrive the default authorization is a relay:
-the command shows a Microsoft sign-in URL that can be opened on any device; after signing in,
-the browser is redirected to http://localhost:53682/... and shows an error page. Copy that
-complete address and paste it back here.
+		Short: "Configure a new remote (OneDrive or Google Drive)",
+		Long: `Configure a new transport remote: --provider onedrive (the default) or drive (Google
+Drive). The default authorization is a relay: the command shows a Microsoft or Google sign-in
+URL that can be opened on any device; after signing in, the browser is redirected to
+http://localhost:53682/ or http://127.0.0.1:53682/ and shows an error page. Copy that complete
+address and paste it back here.
 
-Registering your own Microsoft app (client ID and secret) avoids throttling of rclone's shared app.`,
+Registering your own Microsoft or Google app (client ID and secret) avoids throttling of
+rclone's shared app.`,
 		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			answers, err := sf.parse()
@@ -185,7 +187,7 @@ Registering your own Microsoft app (client ID and secret) avoids throttling of r
 			return a.runSetup(cmd.Context(), s, answers, sf.auth)
 		},
 	}
-	cmd.Flags().StringVar(&provider, "provider", "onedrive", "storage provider")
+	cmd.Flags().StringVar(&provider, "provider", "onedrive", "storage provider: onedrive or drive (Google Drive)")
 	cmd.Flags().StringVar(&clientID, "client-id", "", "OAuth client ID of your own app registration")
 	cmd.Flags().StringVar(&secretFile, "client-secret-file", "", "file holding the OAuth client secret of your own app registration (asked for interactively otherwise)")
 	cmd.Flags().StringArrayVar(&extra, "param", nil, "set another backend option (NAME=VALUE, repeatable; VALUE @FILE reads the value from FILE)")

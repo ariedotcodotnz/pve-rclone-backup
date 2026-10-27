@@ -334,3 +334,40 @@ func TestListSkipsObjectsDeletedMeanwhile(t *testing.T) {
 		t.Fatalf("entries = %+v", entries)
 	}
 }
+
+// TestOverwriteWithDuplicateNames: where several objects may share a name,
+// as on Google Drive, writing a document again updates it rather than
+// adding a second one beside it.
+func TestOverwriteWithDuplicateNames(t *testing.T) {
+	ctl := &faultfs.Controller{}
+	name := fmt.Sprintf("dn%d", time.Now().UnixNano())
+	faultfs.Register(name, ctl)
+	testStorage.SetSection(name, map[string]string{"type": "faulty", "id": name, "remote": t.TempDir(), "duplicate_files": "true"})
+	loc := RepoLocation{Remote: name, Path: "pve-backups"}
+	g, err := secrets.NewGeneration(1, "base32768", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenBase(t.Context(), loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crypted, err := OpenCrypt(t.Context(), loc, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tgt := range []*Target{base, crypted} {
+		for _, content := range []string{"first", "second version"} {
+			if _, err := tgt.PutBytes(t.Context(), "meta/doc.json", []byte(content)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := tgt.ReadAll(t.Context(), "meta/doc.json", 1<<10)
+		if err != nil || string(got) != "second version" {
+			t.Fatalf("read back %q, %v", got, err)
+		}
+	}
+	if got := ctl.Duplicates(); len(got) != 0 {
+		t.Fatalf("uploads added objects of an existing name: %v", got)
+	}
+}

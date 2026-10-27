@@ -91,7 +91,7 @@ func Run(ctx context.Context, c *client.Client) []Check {
 			if !r.Supported || len(r.Storages) == 0 {
 				continue
 			}
-			if r.Type == "onedrive" && !r.Authorized {
+			if r.OAuth && !r.Authorized {
 				add(Fail, "remote "+r.Name, "not authorized; run 'pve-rclone-backup remote reconnect %s'", r.Name)
 			} else {
 				add(OK, "remote "+r.Name, "%s", r.Type)

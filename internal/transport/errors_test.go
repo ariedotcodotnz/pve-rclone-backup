@@ -21,7 +21,12 @@ import (
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/lib/pacer"
 	"golang.org/x/oauth2"
+	"google.golang.org/api/googleapi"
 )
+
+func gErr(code int, reason string) error {
+	return &googleapi.Error{Code: code, Message: "msg", Errors: []googleapi.ErrorItem{{Reason: reason, Message: "msg"}}}
+}
 
 func odErr(code, inner string) error {
 	e := &onedriveapi.Error{}
@@ -49,6 +54,17 @@ func TestClassify(t *testing.T) {
 		{odErr("InvalidAuthenticationToken", ""), ClassAuth},
 		{odErr("activityLimitReached", ""), ClassThrottled},
 		{odErr("invalidRequest", "pathIsTooLong"), ClassConfig},
+		{fmt.Errorf("upload: %w", gErr(403, "storageQuotaExceeded")), ClassQuota},
+		{gErr(403, "teamDriveFileLimitExceeded"), ClassQuota},
+		{gErr(403, "userRateLimitExceeded"), ClassThrottled},
+		{gErr(403, "rateLimitExceeded"), ClassThrottled},
+		// The daily download allowance, not a full drive.
+		{gErr(403, "downloadQuotaExceeded"), ClassThrottled},
+		{gErr(429, ""), ClassThrottled},
+		{gErr(401, "authError"), ClassAuth},
+		{gErr(403, "insufficientPermissions"), ClassAuth},
+		{gErr(404, "notFound"), ClassNotFound},
+		{gErr(503, "backendError"), ClassTransient},
 		{fmt.Errorf("couldn't fetch token: %w", &oauth2.RetrieveError{ErrorCode: "invalid_grant"}), ClassAuth},
 		// As rclone's token source reports a refused refresh, and a failed one.
 		{fmt.Errorf("couldn't fetch token: %w", errors.New(`invalid_grant: maybe token expired? - try refreshing with "rclone config reconnect od:"`)), ClassAuth},
@@ -74,5 +90,11 @@ func TestClassify(t *testing.T) {
 		if got := Classify(c.err); got != c.want {
 			t.Errorf("Classify(%v) = %q, want %q", c.err, got, c.want)
 		}
+	}
+}
+
+func TestStaleDirCacheGoogle(t *testing.T) {
+	if !staleDirCache(fmt.Errorf("list: %w", gErr(404, "notFound"))) || staleDirCache(gErr(403, "rateLimitExceeded")) {
+		t.Fatal("Google Drive 404 answers are stale directory IDs, others are not")
 	}
 }

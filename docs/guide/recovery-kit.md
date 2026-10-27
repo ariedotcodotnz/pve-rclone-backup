@@ -49,8 +49,8 @@ XChaCha20-Poly1305). Store the passphrase separately from the kit, and do not lo
 
 With `--include-token`, the kit also holds the remote's OAuth token. After a disaster, you can then
 restore without signing in to the cloud again. The kit then also grants access to the cloud account,
-so passphrase-protect it. OneDrive tokens expire after 90 days without use, so a kit's token can be
-too old to use; you can always sign in again instead.
+so passphrase-protect it. OneDrive tokens expire after 90 days without use, and Google tokens after
+6 months, so a kit's token can be too old to use; you can always sign in again instead.
 
 ## Export and confirm
 

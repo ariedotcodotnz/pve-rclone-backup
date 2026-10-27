@@ -63,7 +63,7 @@ In each view:
 | | `p` | Set its priority. |
 | | `s` | Scan for finished archives, optionally restricting the storage. |
 | Remotes | `enter` | Details of the selected remote. |
-| Remotes | `a` | Add a OneDrive remote. |
+| Remotes | `a` | Add a OneDrive or Google Drive remote. |
 | | `t` | Test the selected remote. |
 | | `c` | Reconnect it (sign in again). |
 | | `x` | Remove it. |
@@ -125,7 +125,7 @@ terminal text selection and SSH keyboard input work without special mouse suppor
 
 You can go from nothing to a replicating storage without the command line:
 
-1. In **Remotes**, press `a` and sign in to OneDrive. The interface shows the sign-in address
+1. In **Remotes**, press `a` and sign in to OneDrive or Google Drive. The interface shows the sign-in address
    and waits for you to paste the redirect address, as on the
    [command line](remotes.md#add-a-onedrive-remote).
 2. In **Storages**, press `i`, and fill in the storage name, remote, source name and local

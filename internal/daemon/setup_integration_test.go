@@ -200,7 +200,8 @@ func TestRemoteEndpoints(t *testing.T) {
 	c := client.New(e.socket)
 
 	var providers []apiv1.Provider
-	if err := c.Do(ctx, http.MethodGet, "/v1/providers", nil, &providers); err != nil || len(providers) != 1 || providers[0].Name != "onedrive" {
+	if err := c.Do(ctx, http.MethodGet, "/v1/providers", nil, &providers); err != nil || len(providers) != 2 ||
+		providers[0].Name != "onedrive" || providers[1].Name != "drive" {
 		t.Fatalf("providers = %+v, %v", providers, err)
 	}
 	var list []apiv1.Remote

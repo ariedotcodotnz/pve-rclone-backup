@@ -59,7 +59,7 @@ type Storage struct {
 	KeepMin int
 	// DeleteGrace (rclone-delete-grace): Deleted offsite backups are kept as tombstones for this long and can be restored.
 	DeleteGrace time.Duration
-	// RecycleBin (rclone-recycle-bin): Send deleted offsite backups to the provider's recycle bin, where they keep using quota until it is emptied (OneDrive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.
+	// RecycleBin (rclone-recycle-bin): Send deleted offsite backups to the provider's recycle bin, where they keep using quota until it is emptied (OneDrive and Google Drive: up to 30 days). Otherwise they are deleted permanently once rclone-delete-grace has passed.
 	RecycleBin bool
 	// MaxDeletes (rclone-max-deletes): Maximum number of backups a single retention run may delete.
 	MaxDeletes int

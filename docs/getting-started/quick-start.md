@@ -28,6 +28,11 @@ pve-rclone-backup remote add onedrive-main
    is often a hidden system drive, such as `ODCMetadataArchive`.
 6. Confirm the drive it found.
 
+!!! tip "Google Drive instead"
+    Run `pve-rclone-backup remote add gdrive --provider drive` with your own Google app, as described
+    in [Add a Google Drive remote](../guide/remotes.md#add-a-google-drive-remote), and use `gdrive`
+    wherever this guide says `onedrive-main`.
+
 Then check that the remote works. This writes, reads back and deletes a small test file, and shows
 your quota:
 

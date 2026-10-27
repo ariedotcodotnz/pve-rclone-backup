@@ -34,7 +34,7 @@ pve-rclone-backup recover /root/offsite-recovery-kit.txt \
 ```
 
 If the kit holds no credentials, or they have expired (OneDrive refresh tokens expire after 90 days of
-non-use), connect the account again under **the same remote name** that the kit shows, then run
+non-use, Google ones after 6 months), connect the account again under **the same remote name** that the kit shows, then run
 `recover` again:
 
 ```sh

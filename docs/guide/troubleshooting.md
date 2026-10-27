@@ -37,13 +37,14 @@ Work through these in order:
 
 ### Uploads are paused
 
-- **"rejected its credentials"**: the OneDrive token expired or was revoked. Run
+- **"rejected its credentials"**: the OneDrive or Google Drive sign-in expired or was revoked. Run
   `pve-rclone-backup remote reconnect <remote>`.
-- **"is full"**: OneDrive is out of space. See [OneDrive is full](#onedrive-is-full).
+- **"is full"**: the cloud account is out of space. See
+  [The cloud storage is full](#the-cloud-storage-is-full).
 
-### OneDrive is full
+### The cloud storage is full
 
-Compare what OneDrive reports with what the offsite backups should take:
+Compare what OneDrive or Google Drive reports with what the offsite backups should take:
 
 ```sh
 pve-rclone-backup remote about <remote>                  # total, used, free and recycle bin, live
@@ -52,11 +53,13 @@ pve-rclone-backup backup list --storage offsite --state all
 
 The Proxmox VE storage summary shows the same quota as `remote about`, refreshed every 15 minutes
 ([`about-interval`](../reference/daemon-settings.md#about-interval)). Usage covers the whole
-Microsoft account, not only the backups. Space usually goes to:
+Microsoft or Google account, including Outlook, Gmail and Google Photos, not only the backups.
+Space usually goes to:
 
-- **The recycle bin.** Files deleted on OneDrive stay there for up to 30 days and count towards
-  the quota. Before `rclone-recycle-bin` was added, deleted offsite backups went there too. Empty
-  it on the OneDrive website. Microsoft's storage page can take a while to catch up.
+- **The recycle bin.** Files deleted on OneDrive or Google Drive stay in its recycle bin or trash
+  for up to 30 days and count towards the quota. Before `rclone-recycle-bin` was added, deleted
+  offsite backups went there too. Empty it on the provider's website. The provider's storage page
+  can take a while to catch up.
 - **No offsite retention.** Without `prune-backups` on the offsite storage, every offsite backup is
   kept forever. Pruning local backups does not prune offsite ones. See [Retention](retention.md).
 - **Backups waiting to be deleted.** Retention keeps every backup for
@@ -69,8 +72,11 @@ Microsoft account, not only the backups. Space usually goes to:
 
 ### Uploads are slow
 
-- OneDrive throttles busy apps. [Register your own app](remotes.md#your-own-microsoft-app) and
-  reconnect the remote with it.
+- OneDrive and Google Drive throttle busy apps. Register your own
+  [Microsoft app](remotes.md#your-own-microsoft-app) or [Google app](remotes.md#your-own-google-app)
+  and reconnect the remote with it.
+- Google Drive accepts at most 750 GB of uploads per account and day. Uploads beyond that are
+  throttled until Google accepts them again.
 - Check `rclone-bwlimit`, `rclone-transfers` and `upload-workers`; see
   [Bandwidth and load](replication.md#bandwidth-and-load).
 - If uploads cannot keep up with your backups, upload fewer of them with `rclone-min-interval`.
@@ -131,7 +137,7 @@ No. rclone is built into the daemon. You only need rclone itself for
 [manual recovery](../manual-recovery.md) without this tool.
 
 **Which cloud providers are supported?**
-OneDrive. Other rclone backends may follow.
+OneDrive and Google Drive. Other rclone backends may follow.
 
 **Can it replicate from Proxmox Backup Server?**
 No. It replicates the vzdump archive files that backup jobs write to directory-based storages.

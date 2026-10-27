@@ -11,7 +11,7 @@ Manage transport remotes (cloud accounts).
 | Command | Description |
 |---|---|
 | [`about`](#remote-about) | Show the quota of a remote |
-| [`add`](#remote-add) | Configure a new remote (OneDrive) |
+| [`add`](#remote-add) | Configure a new remote (OneDrive or Google Drive) |
 | [`list`](#remote-list) | List remotes |
 | [`reconnect`](#remote-reconnect) | Authorize a remote again (expired or revoked credentials) |
 | [`remove`](#remote-remove) | Remove a remote no storage uses |
@@ -28,12 +28,14 @@ pve-rclone-backup remote about <remote>
 
 ## remote add
 
-Configure a new transport remote. For OneDrive the default authorization is a relay:
-the command shows a Microsoft sign-in URL that can be opened on any device; after signing in,
-the browser is redirected to http://localhost:53682/... and shows an error page. Copy that
-complete address and paste it back here.
+Configure a new transport remote: --provider onedrive (the default) or drive (Google
+Drive). The default authorization is a relay: the command shows a Microsoft or Google sign-in
+URL that can be opened on any device; after signing in, the browser is redirected to
+http://localhost:53682/ or http://127.0.0.1:53682/ and shows an error page. Copy that complete
+address and paste it back here.
 
-Registering your own Microsoft app (client ID and secret) avoids throttling of rclone's shared app.
+Registering your own Microsoft or Google app (client ID and secret) avoids throttling of
+rclone's shared app.
 
 ```
 pve-rclone-backup remote add <remote> [flags]
@@ -48,7 +50,7 @@ pve-rclone-backup remote add <remote> [flags]
 | `--client-id string` | OAuth client ID of your own app registration |
 | `--client-secret-file string` | file holding the OAuth client secret of your own app registration (asked for interactively otherwise) |
 | `--param stringArray` | set another backend option (NAME=VALUE, repeatable; VALUE @FILE reads the value from FILE) |
-| `--provider string` | storage provider (default `onedrive`) |
+| `--provider string` | storage provider: onedrive or drive (Google Drive) (default `onedrive`) |
 
 ## remote list
 

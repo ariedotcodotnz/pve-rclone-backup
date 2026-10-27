@@ -42,6 +42,17 @@ run=$(gh run list --repo ariedotcodotnz/pve-rclone-backup --workflow ci.yml --br
 gh run download "$run" --repo ariedotcodotnz/pve-rclone-backup --name deb
 ```
 
+`--status success` skips runs where any check failed, even a check that does not affect the
+package, such as lint. To take the package of one commit regardless, look up its run by commit:
+
+```sh
+gh run list --repo ariedotcodotnz/pve-rclone-backup --workflow ci.yml --commit <commit> \
+    --json databaseId,conclusion
+gh run download <run> --repo ariedotcodotnz/pve-rclone-backup --name deb
+```
+
+The run's **package** job must have succeeded; otherwise the run has no `deb` artifact.
+
 ### Build it yourself
 
 You need Go 1.26 or newer, `make` and `dpkg-deb`. Any Linux machine works; it does not have to be
@@ -54,6 +65,32 @@ make deb
 ```
 
 The package is written to `dist/pve-rclone-backup_<version>_amd64.deb`.
+
+To build on the Proxmox VE node itself, install Go from [go.dev](https://go.dev/dl/): the Go
+packaged by Debian is too old.
+
+```sh
+apt install git make
+wget https://go.dev/dl/go<version>.linux-amd64.tar.gz
+rm -rf /usr/local/go && tar -C /usr/local -xzf go<version>.linux-amd64.tar.gz
+export PATH=/usr/local/go/bin:$PATH
+git clone https://github.com/ariedotcodotnz/pve-rclone-backup.git
+cd pve-rclone-backup
+make deb
+apt install ./dist/pve-rclone-backup_*_amd64.deb
+```
+
+Later, `git pull` and `make deb` again to build a newer version.
+
+Development builds are versioned `0.1.0~dev.<date>.g<commit>`. Two builds of the same commit on
+the same day get the same version, and `apt install` skips a version that is already installed.
+Use `apt install --reinstall` for such a build, or give your own build a higher version:
+
+```sh
+make deb DEB_VERSION=0.1.0~dev.$(date -u +%Y%m%d).g$(git rev-parse --short HEAD)+local1
+```
+
+A newer day's build still sorts above it.
 
 ## Install
 
@@ -86,6 +123,18 @@ Shell completion for bash and zsh is installed with the package and works in a n
 
 Install the newer package the same way. The daemon restarts. Uploads that were interrupted resume
 from their last complete segment.
+
+In a cluster, upgrade every node before you use a storage property that the new version adds:
+nodes with the older plugin do not know it.
+
+`dpkg -l pve-rclone-backup` shows the installed version; `pve-rclone-backup doctor` checks the
+installation afterwards.
+
+!!! note "Upgrading to a version with `rclone-recycle-bin`"
+    Earlier versions sent deleted offsite backups to the OneDrive recycle bin, where they kept
+    using quota for up to 30 days. Newer versions delete them permanently. Backups that are already
+    in the recycle bin stay there: empty it once on the OneDrive website after upgrading. See
+    [The cloud storage is full](../guide/troubleshooting.md#the-cloud-storage-is-full).
 
 ## Uninstall
 
