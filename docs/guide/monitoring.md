@@ -28,7 +28,8 @@ pve-rclone-backup doctor
 - configuration problems and open alerts;
 - failed uploads;
 - each storage is healthy and has a confirmed recovery kit;
-- what each storage's backups take, and whether the cloud account is full;
+- what each storage's backups take, whether the cloud account is full, uploads that never
+  finished, and whether retention fits in the account;
 - each remote is authorized.
 
 It exits with status **5** when something needs attention, so it fits monitoring systems and

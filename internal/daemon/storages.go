@@ -27,18 +27,20 @@ var backupStates = []string{"complete", "tombstoned", "deleting", "damaged"}
 
 func (d *Daemon) storageRoutes() {
 	d.api.Handle("GET /v1/storages", func(w http.ResponseWriter, r *http.Request) error {
-		list := d.storages.List()
-		for i := range list {
-			list[i] = d.storageView(r.Context(), list[i])
-		}
-		return api.WriteJSON(w, http.StatusOK, list)
+		return api.WriteJSON(w, http.StatusOK, d.storageViews(r.Context(), d.storages.List(), nil))
 	})
 	d.api.Handle("GET /v1/storages/{storage}", func(w http.ResponseWriter, r *http.Request) error {
 		s, err := d.storage(r)
 		if err != nil {
 			return err
 		}
-		return api.WriteJSON(w, http.StatusOK, d.storageView(r.Context(), s))
+		// Storages on the same cloud account share its space.
+		for _, v := range d.storageViews(r.Context(), d.storages.List(), nil) {
+			if v.ID == s.ID {
+				s = v
+			}
+		}
+		return api.WriteJSON(w, http.StatusOK, s)
 	})
 	d.api.Handle("GET /v1/storages/{storage}/status", func(w http.ResponseWriter, r *http.Request) error {
 		st, ok := d.storages.Status(r.PathValue("storage"))

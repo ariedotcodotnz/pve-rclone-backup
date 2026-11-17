@@ -232,7 +232,8 @@ func TestQueueAndStatusOutput(t *testing.T) {
 			return api.WriteJSON(w, 200, []apiv1.Storage{{ID: "offsite", Health: "ok", Active: true, Remote: "od", Path: "pve",
 				Source: "lab", Encryption: "crypt", Usage: &apiv1.Usage{Used: &used}}, {ID: "full", Health: "ok", Active: true,
 				Remote: "od2", Path: "pve", Source: "lab", Encryption: "none", Usage: &apiv1.Usage{Total: &tib, Used: &tib, Free: &free},
-				Space: &apiv1.StorageSpace{Backups: 3, BackupBytes: 3 << 30, Tombstoned: 1, TombstonedBytes: 1 << 30}}})
+				Space:    &apiv1.StorageSpace{Backups: 3, BackupBytes: 3 << 30, Tombstoned: 1, TombstonedBytes: 1 << 30},
+				Warnings: []string{"retention does not fit in the cloud account"}}})
 		},
 		"GET /v1/jobs": func(w http.ResponseWriter, r *http.Request) error {
 			if r.URL.Query().Get("state") != "retry_wait,failed" {
@@ -255,7 +256,8 @@ func TestQueueAndStatusOutput(t *testing.T) {
 		}
 	}
 	if !strings.Contains(r.out, "BACKUPS") || !strings.Contains(r.out, "ACCOUNT FREE") ||
-		!strings.Contains(full, "4.0 GiB 1.0 TiB / 1.0 TiB 0 B") || !strings.Contains(r.out, "whole") {
+		!strings.Contains(full, "4.0 GiB 1.0 TiB / 1.0 TiB 0 B") || !strings.Contains(r.out, "whole") ||
+		!strings.Contains(r.out, "Warning: full: retention does not fit in the cloud account") {
 		t.Fatalf("status shows no backups and account columns:\n%s", r.out)
 	}
 	r = run(t, socket, nil, false, "queue", "list", "--state", "retry_wait,failed")

@@ -79,15 +79,26 @@ sub check_config($class, $sectionId, $config, $create, $skipSchemaCheck) {
 # the daemon to validate (fast, no network) and never change remote state.
 
 sub on_add_hook($class, $storeid, $scfg, %sensitive) {
-    _request('POST', _storage_path($storeid) . '/validate',
-        body => { config => $scfg }, timeout => 10);
+    _validate($storeid, { config => $scfg });
     return undef;
 }
 
 sub on_update_hook_full($class, $storeid, $scfg, $update, $delete, $sensitive) {
-    _request('POST', _storage_path($storeid) . '/validate',
-        body => { config => $scfg, update => $update, delete => $delete }, timeout => 10);
+    _validate($storeid, { config => $scfg, update => $update, delete => $delete });
     return undef;
+}
+
+# The daemon's warnings about a valid configuration, such as retention that
+# does not fit in the cloud account, are shown by pvesm and pvesh and logged
+# by the API daemons.
+sub _validate($storeid, $body) {
+    my $res = _request('POST', _storage_path($storeid) . '/validate', body => $body, timeout => 10);
+    my $warnings = ref($res) eq 'HASH' ? $res->{warnings} : undef;
+    for my $w (ref($warnings) eq 'ARRAY' ? @$warnings : ()) {
+        (my $text = "$w") =~ s/[[:cntrl:]]+/ /g;
+        warn "WARN: rclone-backup: $text\n";
+    }
+    return;
 }
 
 # Called instead of on_update_hook_full on hosts with APIVER 12 (PVE 9.0):

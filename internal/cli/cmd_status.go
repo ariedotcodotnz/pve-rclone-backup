@@ -112,6 +112,28 @@ func backupsString(sp *apiv1.StorageSpace) string {
 	return textfmt.Backups(sp.Backups, sp.BackupBytes, sp.Tombstoned, sp.TombstonedBytes)
 }
 
+// retentionString compares what retention stores at most with what the
+// cloud account can hold.
+func retentionString(sp *apiv1.StorageSpace) string {
+	if sp == nil || sp.Retention == nil {
+		return "-"
+	}
+	r := sp.Retention
+	if r.Unlimited {
+		return fmt.Sprintf("keeps every backup (no prune-backups), about %s more a day; the account has %s for backups",
+			humanBytes(r.DailyGrowthBytes), humanBytes(r.AvailableBytes))
+	}
+	verdict := "fits"
+	if !r.Fits {
+		verdict = "does NOT fit"
+	}
+	s := fmt.Sprintf("stores up to %d backups of a guest, about %s", r.PerGuest, humanBytes(r.NeedBytes))
+	if r.TotalNeedBytes != r.NeedBytes {
+		s += fmt.Sprintf(" (%s with the other storages on the account)", humanBytes(r.TotalNeedBytes))
+	}
+	return s + fmt.Sprintf("; the account has %s for backups: %s", humanBytes(r.AvailableBytes), verdict)
+}
+
 // incompleteString describes the space uploads without a manifest take.
 func incompleteString(sp *apiv1.StorageSpace) string {
 	if sp == nil {

@@ -182,6 +182,7 @@ func Run(ctx context.Context, opts Options) error {
 			d.finishDeletions(id, rep)
 			d.recordIncomplete(id, rep)
 		},
+		Advise: d.retentionAdvice,
 		OnChange: func(id string) {
 			if s, ok := d.storages.Get(id); ok {
 				d.api.Events().Publish("storage.status", s)

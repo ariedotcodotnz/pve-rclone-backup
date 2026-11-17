@@ -93,6 +93,25 @@ archive. A backup stays in the cloud until retention removes it, which is at lea
 default), and then for the grace period (another 7 days by default). With daily backups that is at
 least 14 backups of each guest, whatever `prune-backups` says. Lower both to free space sooner.
 
+The daemon estimates how much retention will store once it has settled, from the size and frequency
+of each guest's recent backups: the backups `prune-backups` and the safety rails keep, those waiting
+out the grace period (and the provider's recycle bin, with `rclone-recycle-bin`), and the newest
+backup until retention next runs. For example, `keep-daily=7,keep-weekly=4` with the default rails
+and nightly backups stores up to 19 backups of each guest at once. `storage show` compares the
+estimate with the space the cloud account has for backups, its free space plus what the offsite
+backups store now:
+
+```console
+$ pve-rclone-backup storage show offsite
+...
+Retention:    stores up to 19 backups of a guest, about 3.3 TiB; the account has 1.2 TiB for backups: does NOT fit
+```
+
+When it does not fit, `status` and `doctor` warn, and so does `pvesm set` (or `storage set`) when you
+change `prune-backups` or the rails. Uploads would otherwise continue until the account is full and
+then stop. Keep fewer backups, lower the rails, or free space in the account. Without `prune-backups`,
+nothing is ever removed: they warn once the account would be full within 30 days.
+
 ## Immutable storages
 
 With [`rclone-immutable`](../reference/storage-properties.md#rclone-immutable) set to `1`, the

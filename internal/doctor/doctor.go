@@ -134,6 +134,10 @@ func space(s apiv1.Storage) (level, message string) {
 			level, message = Warn, "the cloud account is full: "+message
 		}
 	}
+	if r := s.Space.GetRetention(); r != nil && r.Fits {
+		message += fmt.Sprintf("; retention stores up to %s of the %s the account has for backups",
+			textfmt.Bytes(r.TotalNeedBytes), textfmt.Bytes(r.AvailableBytes))
+	}
 	return level, message
 }
 

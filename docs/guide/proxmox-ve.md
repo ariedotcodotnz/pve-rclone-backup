@@ -13,7 +13,7 @@ from the daemon's catalogue, so the GUI stays fast even when the cloud is slow o
 | **Show Configuration** | Shows the guest configuration recorded in the backup, without downloading it. `pvesm extractconfig` does the same. |
 | **Edit Notes**, **Change Protection** | Change the backup's notes and protection, stored with the backup in the cloud. |
 | **Remove** | Marks the backup for deletion, after a grace period; see [Retention and deletion](retention.md#deletion-is-delayed). Protected backups cannot be removed. |
-| **Prune group**, the storage's **Backup Retention** | Offsite retention; see [Retention and deletion](retention.md). |
+| **Prune group**, the storage's **Backup Retention** | Offsite retention; see [Retention and deletion](retention.md). `pvesm set` warns when retention would store more than the cloud account can hold. |
 
 ## What does not work (yet)
 

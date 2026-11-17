@@ -184,6 +184,9 @@ func (m *Manager) Validate(ctx context.Context, id string, req apiv1.ValidateReq
 	if sc.Immutable {
 		resp.Warnings = append(resp.Warnings, "rclone-immutable is set: offsite backups cannot be deleted through this storage")
 	}
+	if m.opts.Advise != nil {
+		resp.Warnings = append(resp.Warnings, m.opts.Advise(ctx, sc)...)
+	}
 	m.Wake()
 	return resp, nil
 }

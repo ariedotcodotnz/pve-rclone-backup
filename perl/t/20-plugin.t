@@ -63,7 +63,9 @@ my $d = FakeDaemon->new(routes => {
               type => 'qemu', vmid => 100, mark => 'remove' },
         ]);
     },
-    'POST /v1/storages/offsite/validate' => sub ($req) { return (200, { ok => JSON::true }) },
+    'POST /v1/storages/offsite/validate' => sub ($req) {
+        return (200, { warnings => ['retention does not fit in the cloud account'] });
+    },
     # Storages being added: not served yet, one valid and one not.
     'POST /v1/storages/added/validate' => sub ($req) { return (200, { ok => JSON::true }) },
     'POST /v1/storages/broken/validate' => sub ($req) {
@@ -142,16 +144,23 @@ like(eval { $provider->job_init(time()) } // $@, qr/direct backups to an rclone-
 like(eval { $provider->restore_get_mechanism($vol) } // $@, qr/pve-rclone-backup restore/,
     'GUI restore points to the CLI');
 
-# Hooks validate via the daemon.
-ok(!defined($plugin->on_add_hook('offsite', $scfg)), 'on_add_hook validates');
+# Hooks validate via the daemon and show its warnings.
+my @warned;
+{
+    local $SIG{__WARN__} = sub { push @warned, @_ };
+    ok(!defined($plugin->on_add_hook('offsite', $scfg)), 'on_add_hook validates');
+}
+is_deeply(\@warned, ["WARN: rclone-backup: retention does not fit in the cloud account\n"], 'validation warnings are shown');
 # APIVER 12 hosts pass only the updated properties to on_update_hook.
 {
     no warnings 'redefine';
     local *PVE::Storage::Custom::RcloneBackupPlugin::_current_config = sub ($storeid) {
         return $storeid eq 'offsite' ? $scfg : die "unexpected storage $storeid\n";
     };
+    local $SIG{__WARN__} = sub { push @warned, @_ };
     ok(!defined($plugin->on_update_hook('offsite', { disable => 1 })), 'legacy on_update_hook validates');
 }
+is(scalar(@warned), 2, 'update warnings are shown too');
 
 my %by = map { ("$_->{method} $_->{path}" => $_) } @{ $d->requests };
 my ($legacy) = grep { $_->{path} eq '/v1/storages/offsite/validate' && $_->{body}->{update} } @{ $d->requests };

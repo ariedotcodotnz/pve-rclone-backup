@@ -145,6 +145,36 @@ type StorageSpace struct {
 	IncompleteBytes int64 `json:"incomplete_bytes"`
 	InProgress      int   `json:"in_progress"`
 	InProgressBytes int64 `json:"in_progress_bytes"`
+	// Retention compares what retention stores at most with the space the
+	// cloud account has for backups; nil if either is unknown.
+	Retention *RetentionFit `json:"retention,omitempty"`
+}
+
+// RetentionFit compares what a storage's retention stores at most, once it
+// has settled, with the space its cloud account has for backups. It is
+// estimated from the sizes and frequency of recent backups.
+type RetentionFit struct {
+	PerGuest  int   `json:"per_guest"`  // most backups of one guest stored at once
+	NeedBytes int64 `json:"need_bytes"` // what the storage's retention stores at most
+	// TotalNeedBytes adds what the other storages on the same cloud
+	// account store at most.
+	TotalNeedBytes int64 `json:"total_need_bytes"`
+	// AvailableBytes is the space the account has for backups: its free
+	// space plus what the storages on it store now.
+	AvailableBytes int64 `json:"available_bytes"`
+	Fits           bool  `json:"fits"`
+	// Unlimited means prune-backups keeps every backup; they grow by
+	// about DailyGrowthBytes a day.
+	Unlimited        bool  `json:"unlimited,omitzero"`
+	DailyGrowthBytes int64 `json:"daily_growth_bytes,omitzero"`
+}
+
+// GetRetention returns s.Retention, nil if s is nil.
+func (s *StorageSpace) GetRetention() *RetentionFit {
+	if s == nil {
+		return nil
+	}
+	return s.Retention
 }
 
 // StoredBytes returns the bytes of all catalogued backups, including those

@@ -57,6 +57,10 @@ type Options struct {
 	Tick time.Duration
 	// OnChange is called after a storage's state changed.
 	OnChange func(id string)
+	// Advise, if set, adds warnings about a valid storage configuration,
+	// such as retention that does not fit in the cloud account. It must
+	// not use the network.
+	Advise func(ctx context.Context, cfg *config.Storage) []string
 	// OnResync is called after each catalogue resync.
 	OnResync func(id string, rep *catalog.Report)
 	Now      func() time.Time

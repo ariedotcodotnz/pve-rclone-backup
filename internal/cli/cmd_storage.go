@@ -45,10 +45,10 @@ func (a *App) storageCommand() *cobra.Command {
 			if a.Output == "json" {
 				return a.json(s)
 			}
-			fmt.Fprintf(a.Out, "Storage:      %s\nHealth:       %s %s\nActive:       %s\nLocation:     %s:%s\nSource:       %s\nEncryption:   %s\nRepository:   %s (generation %d)\nReplicates:   %s\nResynced:     %s\nBackups:      %s\nUploads:      %s\nAccount:      %s\nRecovery kit: %s\n",
+			fmt.Fprintf(a.Out, "Storage:      %s\nHealth:       %s %s\nActive:       %s\nLocation:     %s:%s\nSource:       %s\nEncryption:   %s\nRepository:   %s (generation %d)\nReplicates:   %s\nResynced:     %s\nBackups:      %s\nUploads:      %s\nAccount:      %s\nRetention:    %s\nRecovery kit: %s\n",
 				s.ID, s.Health, s.HealthDetail, yesNo(s.Active), s.Remote, s.Path, s.Source, s.Encryption, dash(s.RepoUUID), s.Generation,
 				dash(strings.Join(s.ReplicateFrom, ", ")), humanTime(s.LastResyncAt), backupsString(s.Space), incompleteString(s.Space),
-				accountString(s.Usage), kitString(s))
+				accountString(s.Usage), retentionString(s.Space), kitString(s))
 			if s.ConfigError != "" {
 				fmt.Fprintln(a.Out, "Config error:", s.ConfigError)
 			}

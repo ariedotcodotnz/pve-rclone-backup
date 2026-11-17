@@ -29,4 +29,10 @@ func TestSpace(t *testing.T) {
 	if level, msg := space(apiv1.Storage{Space: sp}); level != OK || msg != "backups 64 backups, 456.0 GiB" {
 		t.Fatalf("without quota = %s %q", level, msg)
 	}
+	fits := &apiv1.StorageSpace{Backups: 2, BackupBytes: 2 << 30, Incomplete: 1, IncompleteBytes: 1 << 30,
+		Retention: &apiv1.RetentionFit{PerGuest: 4, NeedBytes: 4 << 30, TotalNeedBytes: 4 << 30, AvailableBytes: 10 << 30, Fits: true}}
+	if level, msg := space(apiv1.Storage{Space: fits}); level != OK ||
+		msg != "backups 2 backups, 2.0 GiB; incomplete uploads 1.0 GiB, of which 0 B in progress; retention stores up to 4.0 GiB of the 10.0 GiB the account has for backups" {
+		t.Fatalf("with retention = %s %q", level, msg)
+	}
 }

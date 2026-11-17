@@ -259,3 +259,72 @@ func TestDeletionsFreeSpaceOnAFullRemote(t *testing.T) {
 	// Uploads fit again.
 	repotest.Write(t, r, repotest.Backup{VMID: 103, Time: day(4), Size: 10 << 10})
 }
+
+// TestRetentionThatDoesNotFit: retention that keeps more than the cloud
+// account can hold is reported in the storage's view (status, doctor) and
+// when prune-backups is set, before the account fills up.
+func TestRetentionThatDoesNotFit(t *testing.T) {
+	ctx := t.Context()
+	ctl := &faultfs.Controller{}
+	loc, dir := repotest.Remote(t, ctl)
+	r, err := repo.Init(ctx, loc, repo.InitOptions{Keys: repotest.NewKeys(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two guests backed up nightly, 100 KiB each.
+	for _, vmid := range []int{100, 101} {
+		for d := 1; d <= 5; d++ {
+			repotest.Write(t, r, repotest.Backup{VMID: vmid, Time: time.Date(2026, 10, d, 21, 0, 0, 0, time.Local), Size: 100 << 10})
+		}
+	}
+	stored := dirBytes(t, dir)
+	ctl.SetCapacity(stored + 1<<20) // 1 MiB free
+
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	// The reported setup: with the default rclone-min-age and
+	// rclone-delete-grace, 19 backups of each guest are stored at once.
+	writeStorageCfg(t, e, localSection+strings.TrimSuffix(offsiteSection("offsite", r.Loc.Remote, "homelab"), "\n")+
+		"\tprune-backups keep-daily=7,keep-weekly=4\n\n")
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	s := waitStorage(t, c, "offsite", func(s apiv1.Storage) bool {
+		return resynced(s) && s.Space != nil && s.Space.Retention != nil
+	})
+	fit := s.Space.Retention
+	if fit.Fits || fit.PerGuest != 19 || fit.NeedBytes < 2*19*(100<<10) || fit.NeedBytes > 2*19*(101<<10) ||
+		fit.AvailableBytes != 1<<20+s.Space.BackupBytes {
+		t.Fatalf("retention = %+v, space %+v", fit, s.Space)
+	}
+	if len(s.Warnings) != 1 || !strings.Contains(s.Warnings[0], "retention does not fit") ||
+		!strings.Contains(s.Warnings[0], "up to 19 backups of a guest") ||
+		!strings.Contains(s.Warnings[0], "prune-backups keep-daily=7,keep-weekly=4, rclone-min-age 7d, rclone-delete-grace 7d") {
+		t.Fatalf("warnings = %q", s.Warnings)
+	}
+
+	// Setting prune-backups through PVE validates it: the same setting is
+	// refused with a warning, one that fits is not.
+	validate := func(prune string, extra map[string]any) []string {
+		t.Helper()
+		cfg := map[string]any{"type": "rclone-backup", "rclone-remote": r.Loc.Remote, "rclone-path": "pve-backups",
+			"rclone-source": "homelab", "content": map[string]any{"backup": 1}, "prune-backups": prune}
+		var resp apiv1.ValidateResponse
+		if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/validate", apiv1.ValidateRequest{Config: cfg, Update: extra}, &resp); err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, w := range resp.Warnings {
+			if strings.HasPrefix(w, "retention") {
+				out = append(out, w)
+			}
+		}
+		return out
+	}
+	if w := validate("keep-daily=7,keep-weekly=4", nil); len(w) != 1 {
+		t.Fatalf("validate warnings = %q", w)
+	}
+	if w := validate("keep-last=1", map[string]any{"rclone-min-age": "0", "rclone-delete-grace": "0"}); len(w) != 0 {
+		t.Fatalf("validate warnings for retention that fits = %q", w)
+	}
+}

@@ -72,6 +72,9 @@ below. Space usually goes to:
   can take a while to catch up.
 - **No offsite retention.** Without `prune-backups` on the offsite storage, every offsite backup is
   kept forever. Pruning local backups does not prune offsite ones. See [Retention](retention.md).
+- **Retention that does not fit.** `status` and `doctor` warn when retention stores more than the
+  account can hold, and `storage show` gives the estimate. See
+  [How much space offsite backups use](retention.md#how-much-space-offsite-backups-use).
 - **Backups waiting to be deleted.** Retention keeps every backup for
   [`rclone-min-age`](../reference/storage-properties.md#rclone-min-age) and deletes it only after
   [`rclone-delete-grace`](../reference/storage-properties.md#rclone-delete-grace), 14 days in total
