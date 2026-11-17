@@ -6,11 +6,13 @@ package daemon
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport/faultfs"
 )
 
 func TestMain(m *testing.M) {
@@ -438,5 +441,79 @@ func TestReplicationEndToEnd(t *testing.T) {
 	scanned, err := r.Scan(ctx, "homelab")
 	if err != nil || len(scanned) != 1 || scanned[0].State != repo.StateComplete {
 		t.Fatalf("remote scan = %+v, %v", scanned, err)
+	}
+}
+
+// TestQuotaRefreshedWhileResyncsFail: the quota PVE shows as the storage's
+// size and usage is refreshed on its own schedule. A catalogue that cannot
+// be resynced must not freeze it, and a refreshed quota must not hide the
+// failing resync.
+func TestQuotaRefreshedWhileResyncsFail(t *testing.T) {
+	ctx := t.Context()
+	var failLists atomic.Bool
+	ctl := &faultfs.Controller{ListError: func(string, int) error {
+		if failLists.Load() {
+			return errors.New("listing failed")
+		}
+		return nil
+	}}
+	ctl.SetCapacity(1 << 30)
+	loc, dir := repotest.Remote(t, ctl)
+	r, err := repo.Init(ctx, loc, repo.InitOptions{Keys: repotest.NewKeys(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repotest.Write(t, r, repotest.Backup{Size: 100 << 10})
+
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	if err := os.MkdirAll(filepath.Join(e.pveDir, "pve-rclone-backup"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.pveDir, "pve-rclone-backup", "daemon.cfg"), []byte("about-interval: 1s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeStorageCfg(t, e, localSection+offsiteSection("offsite", r.Loc.Remote, "homelab"))
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	s := waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return resynced(s) && s.Usage != nil && s.Usage.Used != nil })
+	used := *s.Usage.Used
+	// What the backups take is shown apart from the account's usage, and
+	// matches what is stored.
+	scanned, err := r.Scan(ctx, "homelab")
+	if err != nil || len(scanned) != 1 {
+		t.Fatalf("scan = %+v, %v", scanned, err)
+	}
+	var parts int64
+	for _, f := range scanned[0].Files {
+		if strings.HasPrefix(f.Name, "part.") {
+			parts += f.StoredSize
+		}
+	}
+	if s.Space == nil || s.Space.Backups != 1 || s.Space.BackupBytes != parts || s.Space.Tombstoned != 0 || *s.Usage.Total != 1<<30 {
+		t.Fatalf("space = %+v, want %d bytes; usage = %+v", s.Space, parts, s.Usage)
+	}
+
+	// Resyncs fail from now on, and other files fill the account.
+	failLists.Store(true)
+	if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/resync", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return s.Health == apiv1.HealthUnreachable })
+	if err := os.WriteFile(filepath.Join(dir, "other-files.bin"), make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s = waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return *s.Usage.Used >= used+1<<20 })
+	if s.Health != apiv1.HealthUnreachable || !strings.Contains(s.HealthDetail, "listing failed") {
+		t.Fatalf("the quota refresh hid the failing resync: %+v", s)
+	}
+	var st apiv1.StorageStatus
+	if err := c.Do(ctx, http.MethodGet, "/v1/storages/offsite/status", nil, &st); err != nil || st.Used < used+1<<20 || st.Total != 1<<30 || !st.Active {
+		t.Fatalf("PVE status = %+v, %v", st, err)
+	}
+	time.Sleep(1500 * time.Millisecond) // another quota refresh
+	if s := waitStorage(t, c, "offsite", func(apiv1.Storage) bool { return true }); s.Health != apiv1.HealthUnreachable {
+		t.Fatalf("health after another quota refresh = %+v", s)
 	}
 }

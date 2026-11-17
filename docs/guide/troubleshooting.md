@@ -48,17 +48,23 @@ Deleting offsite backups frees space even while the account is full: a deletion 
 before it removes the backup's data, and it is not held back by the pause that stops uploads. Once a
 deletion has freed space, the paused uploads are retried at once.
 
-Compare what OneDrive or Google Drive reports with what the offsite backups should take:
+Compare what OneDrive or Google Drive reports with what the offsite backups take:
 
 ```sh
+pve-rclone-backup status                                 # BACKUPS, ACCOUNT USED and ACCOUNT FREE
+pve-rclone-backup storage show offsite                   # the same, in more detail
 pve-rclone-backup remote about <remote>                  # total, used, free and recycle bin, live
 pve-rclone-backup backup list --storage offsite --state all
 ```
 
-The Proxmox VE storage summary shows the same quota as `remote about`, refreshed every 15 minutes
-([`about-interval`](../reference/daemon-settings.md#about-interval)). Usage covers the whole
-Microsoft or Google account, including Outlook, Gmail and Google Photos, not only the backups.
-Space usually goes to:
+`BACKUPS` is what the storage's backups take in the cloud, including those marked for deletion.
+`ACCOUNT USED` and `ACCOUNT FREE` are the quota of the whole Microsoft or Google account, which
+Outlook, Gmail, Google Photos and any other files count towards too. The Proxmox VE storage summary
+and `pvesm status` show the account's quota as the storage's size and usage: the same figures as
+`remote about`, refreshed every 15 minutes
+([`about-interval`](../reference/daemon-settings.md#about-interval)), also while the catalogue
+cannot be resynced. A large gap between the two is space taken by other files, or by what is listed
+below. Space usually goes to:
 
 - **The recycle bin.** Files deleted on OneDrive or Google Drive stay in its recycle bin or trash
   for up to 30 days and count towards the quota. Before `rclone-recycle-bin` was added, deleted

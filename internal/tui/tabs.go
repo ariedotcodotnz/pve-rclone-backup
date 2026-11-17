@@ -30,18 +30,20 @@ var tabHints = map[tab]string{
 
 func cleanLine(s string) string { return tf.Clean(s) }
 
+// usageText describes the quota of a whole cloud account.
 func usageText(u *apiv1.Usage) string {
-	if u == nil || u.Used == nil {
+	if u == nil {
 		return "-"
 	}
-	s := tf.Bytes(*u.Used)
-	if u.Total != nil && *u.Total > 0 {
-		s += " / " + tf.Bytes(*u.Total)
+	return tf.Account(u.Total, u.Used, u.Free, u.Trashed)
+}
+
+// backupsText describes the space a storage's backups take.
+func backupsText(sp *apiv1.StorageSpace) string {
+	if sp == nil {
+		return "-"
 	}
-	if u.Trashed != nil && *u.Trashed > 0 {
-		s += " (" + tf.Bytes(*u.Trashed) + " in recycle bin)"
-	}
-	return s
+	return tf.Bytes(sp.StoredBytes())
 }
 
 func kitText(s apiv1.Storage) string {
@@ -107,8 +109,8 @@ func (m *Model) dashboard() string {
 				break
 			}
 		}
-		fmt.Fprintf(&b, "  %-14s %s  %s:%s  usage %s  kit %s  newest offsite backup %s\n", cleanLine(s.ID), healthStyled(s.Health),
-			cleanLine(s.Remote), cleanLine(s.Path), usageText(s.Usage), kitText(s), tf.Dash(newest))
+		fmt.Fprintf(&b, "  %-14s %s  %s:%s  backups %s  account %s  kit %s  newest offsite backup %s\n", cleanLine(s.ID), healthStyled(s.Health),
+			cleanLine(s.Remote), cleanLine(s.Path), backupsText(s.Space), usageText(s.Usage), kitText(s), tf.Dash(newest))
 	}
 	var active []string
 	for _, j := range m.jobs {
@@ -195,10 +197,10 @@ func (m *Model) rebuildTable() {
 				cell(strings.Join(r.Storages, ","), 60)})
 		}
 	case tabStorages:
-		cols = columns(m.width, []string{"STORAGE", "HEALTH", "ACTIVE", "LOCATION", "SOURCE", "KIT", "USAGE"}, []int{14, 14, 6, 26, 12, 9})
+		cols = columns(m.width, []string{"STORAGE", "HEALTH", "ACTIVE", "LOCATION", "SOURCE", "KIT", "BACKUPS", "ACCOUNT"}, []int{14, 14, 6, 26, 12, 9, 10})
 		for _, s := range m.storages {
 			rows = append(rows, table.Row{cell(s.ID, 14), s.Health, tf.YesNo(s.Active), cell(s.Remote+":"+s.Path, 26), cell(s.Source, 12),
-				kitText(s), usageText(s.Usage)})
+				kitText(s), backupsText(s.Space), usageText(s.Usage)})
 		}
 	case tabDoctor:
 		cols = columns(m.width, []string{"", "CHECK", "DETAIL"}, []int{5, 26})
@@ -422,7 +424,7 @@ func (m *Model) tabKey(key string) (tea.Cmd, bool) {
 				if err := c.Do(ctx, http.MethodPost, "/v1/remotes/"+url.PathEscape(r.Name)+"/test", nil, &res); err != nil {
 					return doneMsg{err: err}
 				}
-				return doneMsg{text: fmt.Sprintf("%s works: round trip %d ms, usage %s", cleanLine(r.Name), res.LatencyMS, usageText(res.Usage))}
+				return doneMsg{text: fmt.Sprintf("%s works: round trip %d ms, account %s", cleanLine(r.Name), res.LatencyMS, usageText(res.Usage))}
 			}), true
 		case "c":
 			return m.startSetup(http.MethodPost, "/v1/remotes/"+url.PathEscape(r.Name)+"/reconnect", nil), true
@@ -460,10 +462,17 @@ func (m *Model) tabKey(key string) (tea.Cmd, bool) {
 }
 
 func storageDetail(s apiv1.Storage) string {
-	return fmt.Sprintf("Health:        %s %s\nActive:        %s\nLocation:      %s:%s\nSource:        %s\nEncryption:    %s\nRepository:    %s (generation %d)\nReplicates:    %s\nResynced:      %s\nUsage:         %s\nRecovery kit:  %s",
+	backups, account := "-", "-"
+	if sp := s.Space; sp != nil {
+		backups = tf.Backups(sp.Backups, sp.BackupBytes, sp.Tombstoned, sp.TombstonedBytes)
+	}
+	if s.Usage != nil {
+		account = usageText(s.Usage) + " (whole account, as of " + tf.Time(&s.Usage.UpdatedAt) + ")"
+	}
+	return fmt.Sprintf("Health:        %s %s\nActive:        %s\nLocation:      %s:%s\nSource:        %s\nEncryption:    %s\nRepository:    %s (generation %d)\nReplicates:    %s\nResynced:      %s\nBackups:       %s\nAccount:       %s\nRecovery kit:  %s",
 		s.Health, cleanLine(s.HealthDetail), tf.YesNo(s.Active), cleanLine(s.Remote), cleanLine(s.Path), cleanLine(s.Source), s.Encryption,
 		tf.Dash(s.RepoUUID), s.Generation, tf.Dash(cleanLine(strings.Join(s.ReplicateFrom, ", "))), tf.Time(s.LastResyncAt),
-		usageText(s.Usage), kitText(s))
+		backups, account, kitText(s))
 }
 
 func (m *Model) showBackup(b backupRow) tea.Cmd {

@@ -227,9 +227,11 @@ func TestQueueAndStatusOutput(t *testing.T) {
 				Jobs: apiv1.JobCounts{Queued: 2, Failed: 1}})
 		},
 		"GET /v1/storages": func(w http.ResponseWriter, r *http.Request) error {
-			used := int64(10 << 30)
+			used, tib, free := int64(10<<30), int64(1<<40), int64(0)
 			return api.WriteJSON(w, 200, []apiv1.Storage{{ID: "offsite", Health: "ok", Active: true, Remote: "od", Path: "pve",
-				Source: "lab", Encryption: "crypt", Usage: &apiv1.Usage{Used: &used}}})
+				Source: "lab", Encryption: "crypt", Usage: &apiv1.Usage{Used: &used}}, {ID: "full", Health: "ok", Active: true,
+				Remote: "od2", Path: "pve", Source: "lab", Encryption: "none", Usage: &apiv1.Usage{Total: &tib, Used: &tib, Free: &free},
+				Space: &apiv1.StorageSpace{Backups: 3, BackupBytes: 3 << 30, Tombstoned: 1, TombstonedBytes: 1 << 30}}})
 		},
 		"GET /v1/jobs": func(w http.ResponseWriter, r *http.Request) error {
 			if r.URL.Query().Get("state") != "retry_wait,failed" {
@@ -243,6 +245,17 @@ func TestQueueAndStatusOutput(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.out, "2 queued") || !strings.Contains(r.out, "kit missing") ||
 		!strings.Contains(r.out, "MISSING") || !strings.Contains(r.out, "10.0 GiB") {
 		t.Fatalf("status (%d):\n%s%s", r.code, r.out, r.err)
+	}
+	// What the backups take and the account's quota are shown apart.
+	var full string
+	for line := range strings.Lines(r.out) {
+		if strings.HasPrefix(line, "full ") {
+			full = strings.Join(strings.Fields(line), " ")
+		}
+	}
+	if !strings.Contains(r.out, "BACKUPS") || !strings.Contains(r.out, "ACCOUNT FREE") ||
+		!strings.Contains(full, "4.0 GiB 1.0 TiB / 1.0 TiB 0 B") || !strings.Contains(r.out, "whole") {
+		t.Fatalf("status shows no backups and account columns:\n%s", r.out)
 	}
 	r = run(t, socket, nil, false, "queue", "list", "--state", "retry_wait,failed")
 	if r.code != 0 || !strings.Contains(r.out, "25% of 4.0 GiB") || !strings.Contains(r.out, "qemu/100") || !strings.Contains(r.out, "network down") {

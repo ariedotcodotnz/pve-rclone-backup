@@ -11,6 +11,7 @@ import (
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/doctor"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/textfmt"
 )
 
 func (a *App) statusCommand() *cobra.Command {
@@ -50,24 +51,60 @@ func (a *App) statusCommand() *cobra.Command {
 			}
 			fmt.Fprintln(a.Out)
 			rows := make([][]string, 0, len(storages))
+			account := false
 			for _, s := range storages {
+				backups := "-"
+				if s.Space != nil {
+					backups = humanBytes(s.Space.StoredBytes())
+				}
+				used, free := accountColumns(s.Usage)
+				account = account || s.Usage != nil
 				rows = append(rows, []string{s.ID, s.Health, yesNo(s.Active), s.Remote + ":" + s.Path, s.Source,
-					usageString(s.Usage), humanTime(s.LastResyncAt), kitString(s)})
+					backups, used, free, humanTime(s.LastResyncAt), kitString(s)})
 			}
-			a.table([]string{"STORAGE", "HEALTH", "ACTIVE", "LOCATION", "SOURCE", "USAGE", "RESYNCED", "KIT"}, rows)
+			a.table([]string{"STORAGE", "HEALTH", "ACTIVE", "LOCATION", "SOURCE", "BACKUPS", "ACCOUNT USED", "ACCOUNT FREE", "RESYNCED", "KIT"}, rows)
+			if account {
+				fmt.Fprintln(a.Out, "\nBACKUPS is what the storage's backups take in the cloud. ACCOUNT is the quota of the whole\n"+
+					"cloud account, which other files count towards too; Proxmox VE shows it as the storage's usage.")
+			}
 			return nil
 		},
 	}
 }
 
-func usageString(u *apiv1.Usage) string {
-	if u == nil || u.Used == nil {
+// accountColumns returns the used ("used / total") and free space of a
+// cloud account.
+func accountColumns(u *apiv1.Usage) (string, string) {
+	if u == nil {
+		return "-", "-"
+	}
+	used, free := "-", "-"
+	switch {
+	case u.Used != nil && u.Total != nil && *u.Total > 0:
+		used = humanBytes(*u.Used) + " / " + humanBytes(*u.Total)
+	case u.Used != nil:
+		used = humanBytes(*u.Used)
+	}
+	if u.Free != nil {
+		free = humanBytes(max(*u.Free, 0))
+	}
+	return used, free
+}
+
+// accountString describes a cloud account's quota and when it was read.
+func accountString(u *apiv1.Usage) string {
+	if u == nil {
 		return "-"
 	}
-	if u.Total == nil || *u.Total == 0 {
-		return humanBytes(*u.Used)
+	return textfmt.Account(u.Total, u.Used, u.Free, u.Trashed) + " (whole account, as of " + humanTime(&u.UpdatedAt) + ")"
+}
+
+// backupsString describes the space a storage's backups take.
+func backupsString(sp *apiv1.StorageSpace) string {
+	if sp == nil {
+		return "-"
 	}
-	return humanBytes(*u.Used) + " / " + humanBytes(*u.Total)
+	return textfmt.Backups(sp.Backups, sp.BackupBytes, sp.Tombstoned, sp.TombstonedBytes)
 }
 
 func kitString(s apiv1.Storage) string {

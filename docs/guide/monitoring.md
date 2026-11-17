@@ -12,7 +12,8 @@ pve-rclone-backup status
 - queue counts;
 - problems with the configuration files;
 - open alerts;
-- each storage with its health, usage and replication sources.
+- each storage with its health, what its backups take in the cloud (`BACKUPS`), and the quota of
+  the whole cloud account (`ACCOUNT USED`, `ACCOUNT FREE`), which other files count towards too.
 
 ## Health checks
 
@@ -27,6 +28,7 @@ pve-rclone-backup doctor
 - configuration problems and open alerts;
 - failed uploads;
 - each storage is healthy and has a confirmed recovery kit;
+- what each storage's backups take, and whether the cloud account is full;
 - each remote is authorized.
 
 It exits with status **5** when something needs attention, so it fits monitoring systems and

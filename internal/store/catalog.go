@@ -306,6 +306,37 @@ func (s *Store) ListBackups(ctx context.Context, storeID string, f BackupFilter)
 	return out, rows.Err()
 }
 
+// BackupSize is the size of a catalogue entry, for space reports.
+type BackupSize struct {
+	VMType       string
+	VMID         int
+	BackupTime   int64
+	State        string
+	ArchiveSize  int64
+	SegmentSize  int64
+	SegmentCount int
+}
+
+// BackupSizes returns the sizes of a storage's catalogue entries ordered by
+// guest and time, without reading their manifests.
+func (s *Store) BackupSizes(ctx context.Context, storeID string) ([]BackupSize, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT vmtype, vmid, backup_time, state, archive_size, segment_size, segment_count
+		FROM backups WHERE storeid = ? ORDER BY vmtype, vmid, backup_time, collision_index`, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []BackupSize
+	for rows.Next() {
+		var b BackupSize
+		if err := rows.Scan(&b.VMType, &b.VMID, &b.BackupTime, &b.State, &b.ArchiveSize, &b.SegmentSize, &b.SegmentCount); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // DeleteBackup removes a catalogue entry.
 func (s *Store) DeleteBackup(ctx context.Context, storeID, volname string) error {
 	return s.writeEntry(storeID, volname, func() error {

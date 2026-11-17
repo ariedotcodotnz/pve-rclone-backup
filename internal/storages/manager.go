@@ -90,18 +90,36 @@ type entry struct {
 	cfgErr  error
 	enabled bool
 
-	repo         *repo.Repo
-	repoUUID     string
-	generation   int
+	repo       *repo.Repo
+	repoUUID   string
+	generation int
+	// health and detail describe opening the repository and resyncing
+	// its catalogue.
 	health       string
 	detail       string
 	usage        *apiv1.Usage
 	lastResync   time.Time
 	failures     int
 	nextAttempt  time.Time
-	nextAbout    time.Time
 	resyncWanted bool
-	busy         bool
+	busy         bool // opening or resyncing
+	// The quota is refreshed on its own schedule, so that it stays current
+	// while the catalogue cannot be resynced. aboutHealth and aboutDetail
+	// describe its last failure, if it failed.
+	nextAbout   time.Time
+	aboutBusy   bool
+	aboutHealth string
+	aboutDetail string
+}
+
+// currentHealth is the health shown for the entry: that of the repository
+// and catalogue, or, while they are fine, a failure to read the quota. The
+// caller holds the manager lock.
+func (e *entry) currentHealth() (string, string) {
+	if e.health == apiv1.HealthOK && e.aboutHealth != "" {
+		return e.aboutHealth, e.aboutDetail
+	}
+	return e.health, e.detail
 }
 
 // New returns a manager. Call Reload once before serving and Run in the
@@ -285,8 +303,9 @@ func (m *Manager) persist(ctx context.Context, e *entry) {
 		m.mu.Unlock()
 		return
 	}
+	health, detail := e.currentHealth()
 	row := &store.StorageRow{StoreID: e.id, Remote: e.cfg.Remote, BasePath: e.cfg.Path, Source: e.cfg.Source,
-		RepoUUID: e.repoUUID, ConfigHash: e.binding, Health: e.health, HealthDetail: e.detail}
+		RepoUUID: e.repoUUID, ConfigHash: e.binding, Health: health, HealthDetail: detail}
 	if e.generation > 0 {
 		g := int64(e.generation)
 		row.Generation = &g
@@ -335,29 +354,39 @@ func (m *Manager) schedule(ctx context.Context) {
 	defer m.mu.Unlock()
 	now := m.opts.Now()
 	for _, e := range m.entries {
-		if e.busy || !e.enabled || e.cfgErr != nil {
+		if !e.enabled || e.cfgErr != nil {
 			continue
 		}
 		var job func(context.Context, *entry)
 		switch {
-		case now.Before(e.nextAttempt):
+		case e.busy, now.Before(e.nextAttempt):
 		case e.repo == nil:
 			job = m.open
 		case e.resyncWanted || now.Sub(e.lastResync) >= m.resyncInterval(e):
 			job = m.resync
-		case !now.Before(e.nextAbout):
-			job = m.about
 		}
-		if job == nil {
-			continue
+		if job != nil {
+			e.busy = true
+			m.wg.Go(func() {
+				job(ctx, e)
+				m.mu.Lock()
+				e.busy = false
+				m.mu.Unlock()
+				m.Wake() // work that came due meanwhile, such as the first quota refresh
+			})
 		}
-		e.busy = true
-		m.wg.Go(func() {
-			job(ctx, e)
-			m.mu.Lock()
-			e.busy = false
-			m.mu.Unlock()
-		})
+		// The quota does not depend on the catalogue: it is refreshed while
+		// resyncs fail, and even while the repository cannot be opened,
+		// once a first attempt to open it was made.
+		if !e.aboutBusy && !now.Before(e.nextAbout) && (e.repo != nil || e.health != apiv1.HealthOpening) {
+			e.aboutBusy = true
+			m.wg.Go(func() {
+				m.about(ctx, e)
+				m.mu.Lock()
+				e.aboutBusy = false
+				m.mu.Unlock()
+			})
+		}
 	}
 }
 
@@ -497,31 +526,50 @@ func (m *Manager) resync(ctx context.Context, e *entry) {
 	m.persist(ctx, e)
 }
 
+// about refreshes the quota of the storage's remote: through the open
+// repository, or a target opened for it while the repository is not open.
 func (m *Manager) about(ctx context.Context, e *entry) {
 	m.mu.Lock()
-	r := e.repo
+	r, cfg := e.repo, e.cfg
 	m.mu.Unlock()
 	octx, cancel := context.WithTimeout(ctx, m.opts.OpenTimeout)
 	defer cancel()
-	u, err := r.Base().About(octx)
-	now := m.opts.Now()
+	var u *transport.Usage
+	var err error
 	switch {
-	case errors.Is(err, transport.ErrNoQuota):
-		u = nil
-	case err != nil:
-		m.mu.Lock()
-		e.nextAbout = now.Add(min(m.opts.AboutInterval, 5*time.Minute))
-		m.mu.Unlock()
-		m.fail(ctx, e, "quota query", err)
+	case r != nil:
+		u, err = r.Base().About(octx)
+	default:
+		if _, cerr := checkRemote(cfg); cerr != nil {
+			// Opening the repository reports this.
+			m.mu.Lock()
+			e.nextAbout = m.opts.Now().Add(m.opts.AboutInterval)
+			m.mu.Unlock()
+			return
+		}
+		var base *transport.Target
+		if base, err = transport.OpenBase(octx, transport.RepoLocation{Remote: cfg.Remote, Path: cfg.Path}); err == nil {
+			u, err = base.About(octx)
+		}
+	}
+	if ctx.Err() != nil {
 		return
 	}
+	now := m.opts.Now()
 	m.mu.Lock()
-	e.nextAbout = now.Add(m.opts.AboutInterval)
-	if u != nil {
+	switch {
+	case errors.Is(err, transport.ErrNoQuota):
+		e.nextAbout, e.aboutHealth, e.aboutDetail = now.Add(m.opts.AboutInterval), "", ""
+	case err != nil:
+		health, detail := healthOf(err)
+		if health != e.aboutHealth || detail != e.aboutDetail {
+			m.log.Warn("storage quota query failed", "storage", e.id, "health", health, "err", err)
+		}
+		e.nextAbout = now.Add(min(m.opts.AboutInterval, 5*time.Minute))
+		e.aboutHealth, e.aboutDetail = health, detail
+	default:
+		e.nextAbout, e.aboutHealth, e.aboutDetail = now.Add(m.opts.AboutInterval), "", ""
 		e.usage = &apiv1.Usage{Total: u.Total, Used: u.Used, Free: u.Free, Trashed: u.Trashed, UpdatedAt: now.UTC()}
-	}
-	if e.health != apiv1.HealthOK {
-		e.health, e.detail = apiv1.HealthOK, ""
 	}
 	m.mu.Unlock()
 	m.persist(ctx, e)
@@ -629,7 +677,8 @@ func deref(p *int64) int64 {
 
 // view must be called with the manager lock held.
 func (e *entry) view() apiv1.Storage {
-	s := apiv1.Storage{ID: e.id, Enabled: e.enabled, Health: e.health, HealthDetail: e.detail,
+	health, detail := e.currentHealth()
+	s := apiv1.Storage{ID: e.id, Enabled: e.enabled, Health: health, HealthDetail: detail,
 		RepoUUID: e.repoUUID, Generation: e.generation, Usage: e.usage}
 	if c := e.cfg; c != nil {
 		s.Remote, s.Path, s.Source, s.Encryption = c.Remote, c.Path, c.Source, c.Encryption

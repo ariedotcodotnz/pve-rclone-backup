@@ -116,10 +116,34 @@ type Storage struct {
 	RepoUUID      string     `json:"repo_uuid,omitempty"`
 	Generation    int        `json:"generation,omitzero"`
 	LastResyncAt  *time.Time `json:"last_resync_at,omitempty"`
-	Usage         *Usage     `json:"usage,omitempty"`
+	// Usage is the quota of the whole cloud account the storage's remote
+	// signs in to: files other than backups count too.
+	Usage *Usage `json:"usage,omitempty"`
+	// Space is what the storage's backups take in the cloud.
+	Space *StorageSpace `json:"space,omitempty"`
 	// KitConfirmed reports a confirmed recovery kit for the repository;
 	// replication of encrypted repositories waits for it.
 	KitConfirmed bool `json:"kit_confirmed"`
+}
+
+// StorageSpace is what a storage's backups take in the cloud, according to
+// its catalogue: bytes as stored, with encryption overhead.
+type StorageSpace struct {
+	Backups     int   `json:"backups"`      // complete and damaged backups
+	BackupBytes int64 `json:"backup_bytes"` // their size
+	// Backups marked for deletion are stored until their grace period
+	// ends.
+	Tombstoned      int   `json:"tombstoned"`
+	TombstonedBytes int64 `json:"tombstoned_bytes"`
+}
+
+// StoredBytes returns the bytes of all catalogued backups, including those
+// marked for deletion.
+func (s *StorageSpace) StoredBytes() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.BackupBytes + s.TombstonedBytes
 }
 
 // Storage health values.
@@ -135,8 +159,8 @@ const (
 	HealthDisabled      = "disabled"       // disabled or not configured for this node
 )
 
-// Usage is the quota of a storage's remote. Fields are nil when the
-// provider does not report them.
+// Usage is the quota of a cloud account (the whole account, not only the
+// backups in it). Fields are nil when the provider does not report them.
 type Usage struct {
 	Total     *int64    `json:"total,omitempty"`
 	Used      *int64    `json:"used,omitempty"`

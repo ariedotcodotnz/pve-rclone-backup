@@ -12,6 +12,7 @@ import (
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/textfmt"
 )
 
 // PluginPath is where PVE loads the storage plugin from.
@@ -83,6 +84,11 @@ func Run(ctx context.Context, c *client.Client) []Check {
 			default:
 				add(OK, "storage "+s.ID, "healthy")
 			}
+			if s.Enabled {
+				if level, msg := space(s); msg != "" {
+					add(level, "space "+s.ID, "%s", msg)
+				}
+			}
 		}
 	}
 	var remotes []apiv1.Remote
@@ -99,6 +105,29 @@ func Run(ctx context.Context, c *client.Client) []Check {
 		}
 	}
 	return out
+}
+
+// space reports what a storage's backups take in the cloud, next to the
+// quota of the whole cloud account, which other files count towards too.
+// A nearly full account is a warning.
+func space(s apiv1.Storage) (level, message string) {
+	if s.Space == nil && s.Usage == nil {
+		return "", ""
+	}
+	backups := "-"
+	if sp := s.Space; sp != nil {
+		backups = textfmt.Backups(sp.Backups, sp.BackupBytes, sp.Tombstoned, sp.TombstonedBytes)
+	}
+	message = "backups " + backups
+	level = OK
+	if u := s.Usage; u != nil {
+		message += "; account " + textfmt.Account(u.Total, u.Used, u.Free, u.Trashed) +
+			" (the whole cloud account, as of " + textfmt.Time(&u.UpdatedAt) + ")"
+		if u.Free != nil && (*u.Free <= 0 || u.Total != nil && *u.Free < *u.Total/100) {
+			level, message = Warn, "the cloud account is full: "+message
+		}
+	}
+	return level, message
 }
 
 // Healthy reports whether every check passed.

@@ -8,7 +8,7 @@ from the daemon's catalogue, so the GUI stays fast even when the cloud is slow o
 
 | Where | What it does |
 |---|---|
-| Storage summary, `pvesm status` | Shows the cloud account's quota as the storage's size and usage. While the daemon is stopped, the storage shows as inactive. |
+| Storage summary, `pvesm status` | Shows the cloud account's quota as the storage's size and usage: the whole account, which files other than backups count towards too. `pve-rclone-backup status` shows what the backups take. While the daemon is stopped, the storage shows as inactive. |
 | **Backups** tab, `pvesm list` | Lists offsite backups with their guest, time, size, notes and protection. |
 | **Show Configuration** | Shows the guest configuration recorded in the backup, without downloading it. `pvesm extractconfig` does the same. |
 | **Edit Notes**, **Change Protection** | Change the backup's notes and protection, stored with the backup in the cloud. |

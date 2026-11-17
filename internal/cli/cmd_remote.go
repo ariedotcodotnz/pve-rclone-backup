@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/textfmt"
 )
 
 func (a *App) remoteCommand() *cobra.Command {
@@ -60,7 +61,11 @@ func (a *App) remoteCommand() *cobra.Command {
 			if a.Output == "json" {
 				return a.json(res)
 			}
-			fmt.Fprintf(a.Out, "OK: round trip in %d ms, provider hash %s, usage %s\n", res.LatencyMS, dash(res.HashType), usageString(res.Usage))
+			account := "-"
+			if u := res.Usage; u != nil {
+				account = textfmt.Account(u.Total, u.Used, u.Free, u.Trashed)
+			}
+			fmt.Fprintf(a.Out, "OK: round trip in %d ms, provider hash %s, account %s\n", res.LatencyMS, dash(res.HashType), account)
 			return nil
 		}},
 		&cobra.Command{Use: "about <remote>", Short: "Show the quota of a remote", Args: exactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {

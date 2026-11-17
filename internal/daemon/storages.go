@@ -29,7 +29,7 @@ func (d *Daemon) storageRoutes() {
 	d.api.Handle("GET /v1/storages", func(w http.ResponseWriter, r *http.Request) error {
 		list := d.storages.List()
 		for i := range list {
-			list[i].KitConfirmed = d.kitConfirmed(list[i])
+			list[i] = d.storageView(r.Context(), list[i])
 		}
 		return api.WriteJSON(w, http.StatusOK, list)
 	})
@@ -38,7 +38,7 @@ func (d *Daemon) storageRoutes() {
 		if err != nil {
 			return err
 		}
-		return api.WriteJSON(w, http.StatusOK, s)
+		return api.WriteJSON(w, http.StatusOK, d.storageView(r.Context(), s))
 	})
 	d.api.Handle("GET /v1/storages/{storage}/status", func(w http.ResponseWriter, r *http.Request) error {
 		st, ok := d.storages.Status(r.PathValue("storage"))

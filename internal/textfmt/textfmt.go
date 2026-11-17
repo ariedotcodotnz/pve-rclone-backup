@@ -101,3 +101,38 @@ func YesNo(b bool) string {
 	}
 	return "no"
 }
+
+// Account describes a cloud account's quota, such as "1.0 TiB of 1.0 TiB
+// used, 2.0 GiB free". Unknown values are left out; "-" if none is known.
+func Account(total, used, free, trashed *int64) string {
+	var parts []string
+	switch {
+	case used != nil && total != nil && *total > 0:
+		parts = append(parts, Bytes(*used)+" of "+Bytes(*total)+" used")
+	case used != nil:
+		parts = append(parts, Bytes(*used)+" used")
+	}
+	if free != nil {
+		parts = append(parts, Bytes(max(*free, 0))+" free")
+	}
+	if trashed != nil && *trashed > 0 {
+		parts = append(parts, Bytes(*trashed)+" in the recycle bin")
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Backups describes the space backups take, such as "12 backups, 1.2 GiB
+// (2 marked for deletion, 200.0 MiB)".
+func Backups(n int, bytes int64, tombstoned int, tombstonedBytes int64) string {
+	s := fmt.Sprintf("%d backups, %s", n, Bytes(bytes))
+	if n == 1 {
+		s = "1 backup, " + Bytes(bytes)
+	}
+	if tombstoned > 0 {
+		s += fmt.Sprintf(" (%d marked for deletion, %s)", tombstoned, Bytes(tombstonedBytes))
+	}
+	return s
+}

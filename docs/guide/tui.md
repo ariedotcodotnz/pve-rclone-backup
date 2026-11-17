@@ -21,7 +21,7 @@ For a different daemon socket, use `pve-rclone-backup --socket /path/to/api.sock
 
 | Key | View | Shows |
 |---|---|---|
-| `1` | Dashboard | Daemon health, queue counts and alerts; each storage's health, usage and newest offsite backup; running jobs. |
+| `1` | Dashboard | Daemon health, queue counts and alerts; each storage's health, the space its backups take, its cloud account's quota and newest offsite backup; running jobs. |
 | `2` | Backups | Offsite backups of all storages. |
 | `3` | Queue | Uploads, fetches, restores, verifications and deletions. |
 | `4` | Remotes | Cloud accounts and whether they are authorized. |
