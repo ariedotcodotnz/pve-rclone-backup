@@ -582,3 +582,61 @@ func TestResumeAfterRestart(t *testing.T) {
 	h.s.ResumeRemote(t.Context(), "r1")
 	h.waitState(id, StateComplete)
 }
+
+// TestFreeingSpaceIgnoresAFullRemote: deleting is how a full remote gets
+// space back, so a quota error neither pauses jobs that free space nor
+// raises the "remote is full" alert, and their success does not clear it:
+// it is about uploads.
+func TestFreeingSpaceIgnoresAFullRemote(t *testing.T) {
+	quota := errors.New("transport: upload v1/pve1/meta.json: quotaLimitReached: Insufficient Space Available")
+	for _, frees := range []bool{false, true} {
+		t.Run(fmt.Sprintf("FreesSpace=%v", frees), func(t *testing.T) {
+			h := newHarness(t, 1, target("a", "r1", 1))
+			h.s.opts.FreesSpace = frees
+			var mu sync.Mutex
+			failing := map[int64]bool{}
+			h.setScript(func(ctx context.Context, task *Task) error {
+				mu.Lock()
+				fail := failing[task.Job().ID]
+				mu.Unlock()
+				if fail {
+					return quota
+				}
+				return complete(ctx, task)
+			})
+			full := h.add("a", 1)
+			mu.Lock()
+			failing[full] = true
+			mu.Unlock()
+			h.start()
+			j := h.waitState(full, StateRetryWait)
+			if j.ErrorClass != "quota_exceeded" {
+				t.Fatalf("job = %+v", j)
+			}
+			other := h.add("a", 2)
+			alerts, _ := h.st.ActiveAlerts(t.Context())
+			if !frees {
+				if _, ok := h.s.Paused()["r1"]; !ok || len(alerts) != 1 || alerts[0].ID != "quota:r1" {
+					t.Fatalf("uploads to a full remote: pauses %+v, alerts %+v", h.s.Paused(), alerts)
+				}
+				time.Sleep(100 * time.Millisecond)
+				if j, _ := h.st.GetJob(t.Context(), other); j.State != StateQueued {
+					t.Fatalf("upload to a paused remote is %s", j.State)
+				}
+				return
+			}
+			// Retried with backoff (30s at this jitter), not paused.
+			if j.Attempts != 1 || *j.NextAttemptAt > time.Now().Unix()+35 || len(h.s.Paused()) != 0 || len(alerts) != 0 {
+				t.Fatalf("job = %+v, pauses %+v, alerts %+v", j, h.s.Paused(), alerts)
+			}
+			h.waitState(other, StateComplete)
+			if err := h.st.RaiseAlert(t.Context(), store.Alert{ID: "quota:r1", Severity: "error", StoreID: "a", Message: "full"}); err != nil {
+				t.Fatal(err)
+			}
+			h.waitState(h.add("a", 3), StateComplete)
+			if alerts, _ := h.st.ActiveAlerts(t.Context()); len(alerts) != 1 {
+				t.Fatalf("a job freeing space cleared the uploads' alert: %+v", alerts)
+			}
+		})
+	}
+}

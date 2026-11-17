@@ -15,6 +15,9 @@
 // Google Drive, with the option duplicate_files it reports that several
 // objects may share a name; the controller records uploads that would have
 // added another object of an existing name.
+//
+// With Controller.SetCapacity it simulates a cloud account with a quota,
+// which can fill up like a OneDrive.
 package faultfs
 
 import (
@@ -25,10 +28,12 @@ import (
 	"sync"
 	"time"
 
+	onedriveapi "github.com/rclone/rclone/backend/onedrive/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/fspath"
 	"github.com/rclone/rclone/fs/hash"
+	"github.com/rclone/rclone/fs/operations"
 )
 
 // Controller decides which failures to inject. All hooks are optional and
@@ -59,6 +64,43 @@ type Controller struct {
 	flushes    int
 	deletions  []string
 	duplicates []string
+	capacity   int64
+	refusals   int
+}
+
+// SetCapacity turns the remotes of this controller into one cloud account
+// of n bytes, shared by everything stored below their "remote" option. An
+// upload that does not fit fails as OneDrive's do on a full drive
+// (quotaLimitReached), and the remotes report the account's quota. Zero,
+// the default, sets no limit and reports no quota. Set it before the
+// remotes are opened: a remote opened without a capacity reports no quota.
+func (c *Controller) SetCapacity(n int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.capacity = n
+}
+
+func (c *Controller) limit() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.capacity
+}
+
+// QuotaRefusals returns how many uploads failed because the account was
+// full.
+func (c *Controller) QuotaRefusals() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refusals
+}
+
+// ErrQuota returns the error of an upload to a full account: OneDrive's
+// HTTP 507 answer.
+func ErrQuota() error {
+	e := &onedriveapi.Error{}
+	e.ErrorInfo.Code = "quotaLimitReached"
+	e.ErrorInfo.Message = "Insufficient Space Available"
+	return e
 }
 
 // Duplicates lists the uploads that created a second object of an existing
@@ -158,6 +200,7 @@ func init() {
 type Fs struct {
 	name       string
 	root       string
+	account    string // the wrapped remote's root, holding the whole account
 	wrapped    fs.Fs
 	ctl        *Controller
 	features   *fs.Features
@@ -177,12 +220,56 @@ func newFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	}
 	hard, _ := m.Get("hard_delete")
 	dup, _ := m.Get("duplicate_files")
-	f := &Fs{name: name, root: root, wrapped: wrapped, ctl: v.(*Controller), hardDelete: hard == "true"}
+	f := &Fs{name: name, root: root, account: remote, wrapped: wrapped, ctl: v.(*Controller), hardDelete: hard == "true"}
 	f.features = (&fs.Features{CanHaveEmptyDirectories: true}).Fill(ctx, f).Mask(ctx, wrapped).WrapsFs(f, wrapped)
 	f.features.DuplicateFiles = dup == "true"
 	// Like the backends that cache directory IDs, even over one that does not.
 	f.features.DirCacheFlush = f.DirCacheFlush
+	if f.ctl.limit() <= 0 {
+		f.features.About = nil
+	}
 	return f, err
+}
+
+// used returns the bytes stored in the account.
+func (f *Fs) used(ctx context.Context) (int64, error) {
+	acct, err := fs.NewFs(ctx, f.account)
+	if err != nil {
+		return 0, err
+	}
+	_, size, _, err := operations.Count(ctx, acct)
+	return size, err
+}
+
+// checkQuota fails an upload of size bytes that does not fit in the
+// account.
+func (f *Fs) checkQuota(ctx context.Context, size int64) error {
+	limit := f.ctl.limit()
+	if limit <= 0 {
+		return nil
+	}
+	used, err := f.used(ctx)
+	if err != nil {
+		return err
+	}
+	if used+max(size, 0) <= limit {
+		return nil
+	}
+	f.ctl.mu.Lock()
+	f.ctl.refusals++
+	f.ctl.mu.Unlock()
+	return ErrQuota()
+}
+
+// About reports the account's quota (see Controller.SetCapacity).
+func (f *Fs) About(ctx context.Context) (*fs.Usage, error) {
+	total := f.ctl.limit()
+	used, err := f.used(ctx)
+	if err != nil {
+		return nil, err
+	}
+	free := max(total-used, 0)
+	return &fs.Usage{Total: &total, Used: &used, Free: &free}, nil
 }
 
 // DirCacheFlush records the flush and passes it on.
@@ -260,6 +347,10 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 			return nil, err
 		}
 	}
+	if err := f.checkQuota(ctx, src.Size()); err != nil {
+		_, _ = io.Copy(io.Discard, in)
+		return nil, err
+	}
 	if f.features.DuplicateFiles {
 		if _, err := f.wrapped.NewObject(ctx, remote); err == nil {
 			f.ctl.mu.Lock()
@@ -315,6 +406,12 @@ func (o *Object) Remove(ctx context.Context) error {
 }
 
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
+	// Like OneDrive, a full drive refuses a replacement too, even of a
+	// larger file.
+	if err := o.f.checkQuota(ctx, src.Size()); err != nil {
+		_, _ = io.Copy(io.Discard, in)
+		return err
+	}
 	return o.Object.Update(ctx, o.f.wrapReader(o.Remote(), in), src, options...)
 }
 

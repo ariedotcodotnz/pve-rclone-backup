@@ -22,6 +22,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/secrets"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport/faultfs"
 )
 
 func TestMain(m *testing.M) {
@@ -596,5 +597,94 @@ func TestCommitRefusesOversizedManifest(t *testing.T) {
 		if f.Name == layout.MetaName || f.Name == layout.ManifestName {
 			t.Errorf("refused commit wrote %s", f.Name)
 		}
+	}
+}
+
+// storedBytes returns the bytes stored below dir.
+func storedBytes(t *testing.T, dir string) int64 {
+	t.Helper()
+	var n int64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		fi, err := d.Info()
+		if err == nil {
+			n += fi.Size()
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestDeleteOnFullRemote: a full remote refuses every upload, including
+// the "deleting" mark on the meta document. Deleting is how space is
+// freed, so the deletion goes ahead without the mark.
+func TestDeleteOnFullRemote(t *testing.T) {
+	ctx := t.Context()
+	ctl := &faultfs.Controller{}
+	loc, dir := repotest.Remote(t, ctl)
+	r, err := repo.Init(ctx, loc, repo.InitOptions{Keys: repotest.NewKeys(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := repotest.Backup{Size: 200 << 10}
+	repotest.Write(t, r, b)
+	full := storedBytes(t, dir)
+	ctl.SetCapacity(full)
+	if err := r.WriteMeta(ctx, 1, b.ID(), manifest.NewMeta(time.Now())); transport.Classify(err) != transport.ClassQuota {
+		t.Fatalf("upload to a full remote: %v", err)
+	}
+	refused := ctl.QuotaRefusals()
+
+	if err := r.Delete(ctx, 1, b.ID(), "retention"); err != nil {
+		t.Fatalf("delete on a full remote: %v", err)
+	}
+	if ctl.QuotaRefusals() == refused {
+		t.Fatal("the deletion did not try to mark the backup")
+	}
+	if scanned, err := r.Scan(ctx, "homelab"); err != nil || len(scanned) != 0 {
+		t.Fatalf("scan after delete = %+v, %v", scanned, err)
+	}
+	if left := storedBytes(t, dir); left >= full-200<<10 {
+		t.Fatalf("%d of %d bytes still stored", left, full)
+	}
+	// With space freed, uploads work again.
+	repotest.Write(t, r, repotest.Backup{VMID: 101, Size: 10 << 10})
+}
+
+func TestPurgeIncomplete(t *testing.T) {
+	ctx := t.Context()
+	r, _ := repotest.Init(t)
+	committed := repotest.Backup{VMID: 100, Size: 100 << 10}
+	repotest.Write(t, r, committed)
+	partial := repotest.Backup{VMID: 101, Size: 150 << 10, Log: "log\n"}
+	repotest.Upload(t, r, partial)
+	scanned, err := r.Scan(ctx, "homelab")
+	if err != nil || len(scanned) != 2 || scanned[1].State != repo.StateIncomplete {
+		t.Fatalf("scan = %+v, %v", scanned, err)
+	}
+	var want int64
+	for _, f := range scanned[1].Files {
+		want += f.StoredSize
+	}
+
+	if _, _, err := r.PurgeIncomplete(ctx, 1, committed.ID()); !errors.Is(err, repo.ErrCommitted) {
+		t.Fatalf("purge of a committed backup: %v", err)
+	}
+	files, n, err := r.PurgeIncomplete(ctx, 1, partial.ID())
+	if err != nil || files != 4 || n != want {
+		t.Fatalf("purge = %d files, %d bytes (want 4, %d), %v", files, n, want, err)
+	}
+	scanned, err = r.Scan(ctx, "homelab")
+	if err != nil || len(scanned) != 1 || scanned[0].ID != committed.ID() || scanned[0].State != repo.StateComplete {
+		t.Fatalf("scan after purge = %+v, %v", scanned, err)
+	}
+	// Nothing left to purge.
+	if files, _, err := r.PurgeIncomplete(ctx, 1, partial.ID()); err != nil || files != 0 {
+		t.Fatalf("second purge = %d, %v", files, err)
 	}
 }

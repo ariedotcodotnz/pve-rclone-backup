@@ -74,7 +74,7 @@ running the restore).
 |---|---|
 | Network errors, timeouts, server errors, throttling | Retried after 30 seconds, then after doubling delays of up to 6 hours, for as long as it takes. If the cloud asks for a longer wait, that is respected. An alert is raised when a job has made no progress for 24 hours. |
 | The remote rejects its credentials | Every upload to the remote is paused and an alert is raised. Run `pve-rclone-backup remote reconnect`. |
-| The remote is full | Every upload to the remote is paused and retried every 30 minutes. Free space, or empty the recycle bin. |
+| The remote is full | Every upload to the remote is paused and retried every 30 minutes, or as soon as a deletion has freed space. Free space, or empty the recycle bin. Deleting offsite backups keeps working: deletions are not paused. |
 | Data read back does not match | The job fails. |
 | Other errors | Retried up to 10 times, then the job fails. |
 

@@ -86,18 +86,31 @@ func (d *Deleter) Run(ctx context.Context, t *jobs.Task) error {
 	if err != nil {
 		return jobs.Permanent(err)
 	}
+	deleted := false
 	if b == nil {
-		// Not catalogued: only finish a deletion the remote records.
+		// Not catalogued: only finish a deletion the remote records, or the
+		// remains of one that ran unmarked on a full remote (repo.Delete):
+		// a directory without a manifest. A resync drops such a backup from
+		// the catalogue. A committed backup is left alone.
 		meta, err := rp.ReadMeta(ctx, gen, id)
 		if err != nil {
 			return err
 		}
 		if meta.Tombstone == nil || meta.Tombstone.State != "deleting" {
-			return jobs.Permanent(fmt.Errorf("%s is not being deleted", p.RemoteDir))
+			_, _, err := rp.PurgeIncomplete(ctx, gen, id)
+			if errors.Is(err, repo.ErrCommitted) {
+				return jobs.Permanent(fmt.Errorf("%s is not being deleted", p.RemoteDir))
+			}
+			if err != nil {
+				return err
+			}
+			deleted = true
 		}
 	}
-	if err := rp.Delete(ctx, gen, id, p.Reason); err != nil {
-		return err
+	if !deleted {
+		if err := rp.Delete(ctx, gen, id, p.Reason); err != nil {
+			return err
+		}
 	}
 	if err := d.Store.DeleteBackup(ctx, j.StoreID, j.BackupVolname); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err

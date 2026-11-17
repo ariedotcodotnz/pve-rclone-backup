@@ -90,3 +90,6 @@ pct restore 200 vzdump-lxc-200-2026_10_04-02_00_01.tar.zst --storage local-lvm
 ```
 
 A directory whose `meta.json` shows `"state": "deleting"` was being deleted and may be incomplete.
+A directory without `manifest.json` holds no usable backup: an upload that never finished, or a
+deletion that was interrupted while the cloud account was full (such a deletion cannot mark
+`meta.json` first).

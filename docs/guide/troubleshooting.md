@@ -44,6 +44,10 @@ Work through these in order:
 
 ### The cloud storage is full
 
+Deleting offsite backups frees space even while the account is full: a deletion uploads nothing
+before it removes the backup's data, and it is not held back by the pause that stops uploads. Once a
+deletion has freed space, the paused uploads are retried at once.
+
 Compare what OneDrive or Google Drive reports with what the offsite backups should take:
 
 ```sh

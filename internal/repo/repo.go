@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
@@ -41,6 +42,9 @@ var (
 	// ErrReplaced means the location holds another repository than the one
 	// recorded locally.
 	ErrReplaced = errors.New("repo: a different repository now exists at this location")
+	// ErrCommitted means a backup directory holds a committed backup,
+	// which only Delete removes.
+	ErrCommitted = errors.New("repo: the directory holds a committed backup")
 )
 
 // readDocument reads a small document, marking oversized or undecryptable
@@ -523,6 +527,13 @@ func checkParts(m *manifest.Manifest, entries []transport.Entry) []string {
 // apparently complete but damaged backup: the meta document is marked as
 // deleting, then the manifest (the commit record) goes first, then the
 // data, then the meta document and empty directories.
+//
+// Deleting backups is how a full remote gets space back, and a full remote
+// refuses every upload, even of the small meta document. So if marking it
+// fails because the remote is full, the deletion goes ahead unmarked. Once
+// the manifest is gone the backup is no longer committed and never listed;
+// what a crash leaves behind is an incomplete backup directory, which
+// PurgeIncomplete removes.
 func (r *Repo) Delete(ctx context.Context, gen int, id layout.BackupID, reason string) error {
 	t, err := r.Target(gen)
 	if err != nil {
@@ -542,16 +553,10 @@ func (r *Repo) Delete(ctx context.Context, gen int, id layout.BackupID, reason s
 		meta.Tombstone = &manifest.Tombstone{RequestedAt: now, DeleteAfter: now, Reason: reason}
 	}
 	meta.Tombstone.State = "deleting"
-	if err := r.WriteMeta(ctx, gen, id, meta); err != nil {
+	if err := r.WriteMeta(ctx, gen, id, meta); err != nil && transport.Classify(err) != transport.ClassQuota {
 		return err
 	}
-	remove := func(name string) error {
-		if err := t.Remove(ctx, id.Path(name)); err != nil && transport.Classify(err) != transport.ClassNotFound {
-			return err
-		}
-		return nil
-	}
-	if err := remove(layout.ManifestName); err != nil {
+	if err := removeFile(ctx, t, id, layout.ManifestName); err != nil {
 		return err
 	}
 	entries, err := t.List(ctx, id.Dir())
@@ -562,18 +567,70 @@ func (r *Repo) Delete(ctx context.Context, gen int, id layout.BackupID, reason s
 		if e.Dir || e.Name == layout.MetaName {
 			continue
 		}
-		if err := remove(e.Name); err != nil {
+		if err := removeFile(ctx, t, id, e.Name); err != nil {
 			return err
 		}
 	}
-	if err := remove(layout.MetaName); err != nil {
+	if err := removeFile(ctx, t, id, layout.MetaName); err != nil {
 		return err
 	}
-	// Remove now-empty directories up to the source directory.
+	removeEmptyDirs(ctx, t, id)
+	return nil
+}
+
+// PurgeIncomplete removes what an upload that never finished, or a
+// deletion that stopped half-way, left in a backup directory, and returns
+// the number of files and the bytes stored that it removed. It writes
+// nothing, so it works on a full remote. A directory that holds a manifest
+// is refused with ErrCommitted: a committed backup is only removed by
+// Delete, after its grace period. A missing directory is not an error.
+//
+// The caller must know that no upload into the directory is under way: an
+// upload committed while its directory is purged ends up damaged.
+func (r *Repo) PurgeIncomplete(ctx context.Context, gen int, id layout.BackupID) (files int, bytes int64, err error) {
+	t, err := r.Target(gen)
+	if err != nil {
+		return 0, 0, err
+	}
+	entries, err := t.List(ctx, id.Dir())
+	if transport.Classify(err) == transport.ClassNotFound {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	if slices.ContainsFunc(entries, func(e transport.Entry) bool { return !e.Dir && e.Name == layout.ManifestName }) {
+		return 0, 0, fmt.Errorf("%w: %s", ErrCommitted, id)
+	}
+	for _, e := range entries {
+		if e.Dir {
+			continue
+		}
+		if err := removeFile(ctx, t, id, e.Name); err != nil {
+			return files, bytes, err
+		}
+		files++
+		bytes += e.StoredSize
+	}
+	removeEmptyDirs(ctx, t, id)
+	return files, bytes, nil
+}
+
+// removeFile removes a file of a backup directory; a missing file is not
+// an error.
+func removeFile(ctx context.Context, t *transport.Target, id layout.BackupID, name string) error {
+	if err := t.Remove(ctx, id.Path(name)); err != nil && transport.Classify(err) != transport.ClassNotFound {
+		return err
+	}
+	return nil
+}
+
+// removeEmptyDirs removes a backup directory and its parents up to the
+// source directory, as far as they are empty.
+func removeEmptyDirs(ctx context.Context, t *transport.Target, id layout.BackupID) {
 	for dir := id.Dir(); dir != layout.SourceDir(id.Source); dir = path.Dir(dir) {
 		if err := t.Rmdir(ctx, dir); err != nil {
 			break
 		}
 	}
-	return nil
 }

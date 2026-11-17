@@ -66,11 +66,16 @@ type Options struct {
 	Targets func() []*config.Storage
 	// Ready, if set, reports whether a storage can run jobs now (its
 	// repository is open); jobs of other storages wait.
-	Ready    func(storeID string) error
-	Runner   Runner
-	OnUpdate func(apiv1.JobUpdate)
-	Now      func() time.Time
-	Rand     func() float64
+	Ready func(storeID string) error
+	// FreesSpace marks jobs that only remove data. Deleting is how a full
+	// remote gets space back, so a quota error neither pauses the remote
+	// for them nor raises or clears the "remote is full" alert, which is
+	// about uploads; they retry it like a transient error.
+	FreesSpace bool
+	Runner     Runner
+	OnUpdate   func(apiv1.JobUpdate)
+	Now        func() time.Time
+	Rand       func() float64
 	// Poll is how often runnable jobs are looked for without a wake-up
 	// (default 5s).
 	Poll         time.Duration
@@ -390,6 +395,9 @@ func (s *Scheduler) retryPolicy(ctx context.Context, j store.Job, remote string,
 			"Remote %q rejected its credentials; uploads are paused. Reconnect it with 'pve-rclone-backup remote reconnect %s'.", remote, remote))
 		return StateRetryWait, "paused: " + msg, setErr(j.Attempts, until)
 	case transport.ClassQuota:
+		if s.opts.FreesSpace {
+			break // retried with backoff below
+		}
 		until := now.Add(quotaPause)
 		s.pause(remote, until, "the remote is full")
 		s.raise(ctx, "quota:"+remote, "error", j.StoreID, fmt.Sprintf(
@@ -426,7 +434,10 @@ func (s *Scheduler) raise(ctx context.Context, id, severity, storeID, message st
 func (s *Scheduler) clearAlerts(ctx context.Context, j store.Job, remote string) {
 	ids := []string{fmt.Sprintf("stalled:%d", j.ID)}
 	if remote != "" {
-		ids = append(ids, "auth:"+remote, "quota:"+remote)
+		ids = append(ids, "auth:"+remote)
+		if !s.opts.FreesSpace {
+			ids = append(ids, "quota:"+remote)
+		}
 		s.ResumeRemote(ctx, remote)
 	}
 	for _, id := range ids {

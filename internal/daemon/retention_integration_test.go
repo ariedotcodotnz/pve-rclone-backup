@@ -5,7 +5,10 @@
 package daemon
 
 import (
+	"io/fs"
+	"maps"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,9 +16,11 @@ import (
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/transport/faultfs"
 )
 
@@ -136,4 +141,121 @@ func TestRetention(t *testing.T) {
 	if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/prune", apiv1.PruneRequest{DryRun: true}, nil); err != nil {
 		t.Fatalf("preview on an immutable storage: %v", err)
 	}
+}
+
+// dirBytes returns the bytes stored below a local directory.
+func dirBytes(t *testing.T, dir string) int64 {
+	t.Helper()
+	var n int64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		fi, err := d.Info()
+		if err == nil {
+			n += fi.Size()
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestDeletionsFreeSpaceOnAFullRemote: the cloud account is full, so it
+// refuses every upload. Deleting backups, the way to get space back, must
+// still work: delete jobs write nothing before they free space, and the
+// pause that holds back uploads to a full remote does not hold them back.
+func TestDeletionsFreeSpaceOnAFullRemote(t *testing.T) {
+	ctx := t.Context()
+	ctl := &faultfs.Controller{}
+	loc, dir := repotest.Remote(t, ctl)
+	r, err := repo.Init(ctx, loc, repo.InitOptions{Keys: repotest.NewKeys(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 2, 0, 1, 0, time.Local) }
+	for _, vmid := range []int{100, 101, 102} {
+		for _, d := range []int{1, 2, 3} {
+			repotest.Write(t, r, repotest.Backup{VMID: vmid, Time: day(d), Size: 200 << 10})
+		}
+	}
+	full := dirBytes(t, dir)
+	ctl.SetCapacity(full)
+	if err := r.WriteMeta(ctx, 1, repotest.Backup{VMID: 100, Time: day(1)}.ID(), manifest.NewMeta(time.Now())); transport.Classify(err) != transport.ClassQuota {
+		t.Fatalf("upload to the full remote: %v", err)
+	}
+
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	writeStorageCfg(t, e, localSection+strings.TrimSuffix(offsiteSection("offsite", r.Loc.Remote, "homelab"), "\n")+
+		"\tprune-backups keep-last=1\n\trclone-min-age 0\n\trclone-keep-min 0\n\trclone-delete-grace 0\n\n")
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	waitStorage(t, c, "offsite", resynced)
+
+	// The operator deletes a backup, then runs retention.
+	var b apiv1.Backup
+	if err := c.Do(ctx, http.MethodDelete, "/v1/storages/offsite/backups/vzdump-qemu-102-2026_10_03-02_00_01.vma.zst", nil, &b); err != nil || b.State != "tombstoned" {
+		t.Fatalf("delete = %+v, %v", b, err)
+	}
+	if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/retention", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	refused := ctl.QuotaRefusals()
+
+	// Every deletion completes, and only the newest backup of each guest
+	// is left (the operator's deletion made 102's second newest its newest).
+	want := map[string]bool{"qemu/100/2026_10_03-02_00_01": true, "qemu/101/2026_10_03-02_00_01": true, "qemu/102/2026_10_02-02_00_01": true}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var deletes []apiv1.Job
+		if err := c.Do(ctx, http.MethodGet, "/v1/jobs?kind=delete", nil, &deletes); err != nil {
+			t.Fatal(err)
+		}
+		done := len(deletes) == 6
+		for _, j := range deletes {
+			if j.State == jobs.StateRetryWait {
+				t.Fatalf("a deletion waits for space: %+v", j)
+			}
+			done = done && j.State == jobs.StateComplete
+		}
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deletions not finished: %+v", deletes)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	scanned, err := r.Scan(ctx, "homelab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := map[string]bool{}
+	for _, sb := range scanned {
+		left[strings.TrimPrefix(sb.ID.Dir(), "v1/homelab/")] = true
+	}
+	if !maps.Equal(left, want) {
+		t.Fatalf("left on the remote: %v", slices.Sorted(maps.Keys(left)))
+	}
+	if refused == 0 {
+		t.Fatal("nothing was refused: the remote was not full")
+	}
+	if used := dirBytes(t, dir); used > full*4/10 {
+		t.Fatalf("%d of %d bytes still stored", used, full)
+	}
+	var st apiv1.Status
+	if err := c.Do(ctx, http.MethodGet, "/v1/status", nil, &st); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range st.Alerts {
+		if strings.HasPrefix(a.ID, "quota:") {
+			t.Fatalf("deletions raised %+v", a)
+		}
+	}
+	// Uploads fit again.
+	repotest.Write(t, r, repotest.Backup{VMID: 103, Time: day(4), Size: 10 << 10})
 }

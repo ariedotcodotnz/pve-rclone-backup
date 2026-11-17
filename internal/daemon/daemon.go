@@ -239,10 +239,11 @@ func Run(ctx context.Context, opts Options) error {
 		})
 	}
 	d.deletes = jobs.New(jobs.Options{
-		Log: d.log, Store: st, Node: opts.Node, Kind: "delete", Workers: 1, Targets: d.storages.Targets,
+		Log: d.log, Store: st, Node: opts.Node, Kind: "delete", Workers: 1, Targets: d.storages.Targets, FreesSpace: true,
 		Runner: &retention.Deleter{Log: d.log, Store: st, Repos: d.storages.Repo, Lock: d.lockBackup, OnRemoved: func(storeID, volname string) {
 			d.contentResolved(storeID, volname)
 			d.api.Events().Publish("backup.removed", map[string]string{"storage": storeID, "volname": volname})
+			d.spaceFreed(storeID)
 		}},
 		Ready: func(id string) error {
 			_, _, err := d.storages.Repo(id)
@@ -376,6 +377,15 @@ func (d *Daemon) replicationReady(id string) error {
 		return fmt.Errorf("storage %s waits for a confirmed recovery kit", id)
 	}
 	return nil
+}
+
+// spaceFreed lets uploads paused because a storage's remote was full try
+// again now, rather than when the pause would have ended: a deletion just
+// freed space there.
+func (d *Daemon) spaceFreed(storeID string) {
+	if cfg, ok := d.storages.Config(storeID); ok && d.scheduler != nil {
+		d.scheduler.ResumeRemote(context.Background(), cfg.Remote)
+	}
 }
 
 // remoteUsers maps transport remotes to the storages using them.
