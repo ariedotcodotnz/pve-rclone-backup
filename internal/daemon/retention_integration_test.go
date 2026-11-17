@@ -285,7 +285,7 @@ func TestRetentionThatDoesNotFit(t *testing.T) {
 	// The reported setup: with the default rclone-min-age and
 	// rclone-delete-grace, 19 backups of each guest are stored at once.
 	writeStorageCfg(t, e, localSection+strings.TrimSuffix(offsiteSection("offsite", r.Loc.Remote, "homelab"), "\n")+
-		"\tprune-backups keep-daily=7,keep-weekly=4\n\n")
+		"\tprune-backups keep-daily=7,keep-weekly=4\n\trclone-replicate-from local\n\n")
 	stop := start(t, e)
 	defer func() { _ = stop() }()
 	c := client.New(e.socket)
@@ -305,17 +305,21 @@ func TestRetentionThatDoesNotFit(t *testing.T) {
 
 	// Setting prune-backups through PVE validates it: the same setting is
 	// refused with a warning, one that fits is not.
-	validate := func(prune string, extra map[string]any) []string {
+	validate := func(prune string, extra map[string]any, deleted ...any) []string {
 		t.Helper()
 		cfg := map[string]any{"type": "rclone-backup", "rclone-remote": r.Loc.Remote, "rclone-path": "pve-backups",
-			"rclone-source": "homelab", "content": map[string]any{"backup": 1}, "prune-backups": prune}
+			"rclone-source": "homelab", "content": map[string]any{"backup": 1}, "rclone-replicate-from": "local"}
+		if prune != "" {
+			cfg["prune-backups"] = prune
+		}
 		var resp apiv1.ValidateResponse
-		if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/validate", apiv1.ValidateRequest{Config: cfg, Update: extra}, &resp); err != nil {
+		if err := c.Do(ctx, http.MethodPost, "/v1/storages/offsite/validate", apiv1.ValidateRequest{Config: cfg, Update: extra,
+			Delete: deleted}, &resp); err != nil {
 			t.Fatal(err)
 		}
 		var out []string
 		for _, w := range resp.Warnings {
-			if strings.HasPrefix(w, "retention") {
+			if strings.HasPrefix(w, "retention") || strings.HasPrefix(w, "prune-backups") {
 				out = append(out, w)
 			}
 		}
@@ -326,5 +330,22 @@ func TestRetentionThatDoesNotFit(t *testing.T) {
 	}
 	if w := validate("keep-last=1", map[string]any{"rclone-min-age": "0", "rclone-delete-grace": "0"}); len(w) != 0 {
 		t.Fatalf("validate warnings for retention that fits = %q", w)
+	}
+	// The setting validated decides, not the current one: a storage being
+	// disabled or no longer uploading needs no space, and one bound to
+	// another source has no catalogue yet.
+	for name, w := range map[string][]string{
+		"disabled":      validate("keep-daily=7,keep-weekly=4", map[string]any{"disable": 1}),
+		"not uploading": validate("keep-daily=7,keep-weekly=4", nil, "rclone-replicate-from"),
+		"rebound":       validate("keep-daily=7,keep-weekly=4", map[string]any{"rclone-source": "office"}),
+	} {
+		if len(w) != 0 {
+			t.Errorf("validate warnings for a storage %s = %q", name, w)
+		}
+	}
+	// Without prune-backups the account is full in days: one warning says
+	// so.
+	if w := validate("", nil); len(w) != 1 || !strings.Contains(w[0], "the cloud account is full in") {
+		t.Fatalf("validate warnings without prune-backups = %q", w)
 	}
 }

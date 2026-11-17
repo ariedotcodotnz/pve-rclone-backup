@@ -59,8 +59,10 @@ func (d *Daemon) storageViews(ctx context.Context, list []apiv1.Storage, overrid
 		s := &list[i]
 		s.KitConfirmed = d.kitConfirmed(*s)
 		cfg, ok := d.storages.Config(s.ID)
+		enabled := s.Enabled
 		if override != nil && override.ID == s.ID {
 			cfg, ok = override, true
+			enabled = !cfg.Base.Disable && (len(cfg.Base.Nodes) == 0 || slices.Contains(cfg.Base.Nodes, d.opts.Node))
 		}
 		if !ok {
 			continue
@@ -72,7 +74,7 @@ func (d *Daemon) storageViews(ctx context.Context, list []apiv1.Storage, overrid
 		}
 		s.Space = storageSpace(sizes, s.Encryption == "crypt")
 		d.incompleteSpace(ctx, s)
-		if !s.Enabled {
+		if !enabled {
 			continue
 		}
 		est := retention.EstimateSpace(cfg, sizes, d.backupTimes(ctx, s.ID))
@@ -86,11 +88,15 @@ func (d *Daemon) storageViews(ctx context.Context, list []apiv1.Storage, overrid
 			a.free = u.Free
 		}
 		a.members, a.estimates = append(a.members, i), append(a.estimates, est)
-		if est.Unlimited {
+		switch {
+		case cfg.Immutable, len(cfg.ReplicateFrom) == 0:
+			// It deletes nothing, or it does not upload: nothing it
+			// stores is counted on to make room.
+		case est.Unlimited:
 			// Its backups are never removed; only what is being deleted
 			// or never finished uploading makes room.
 			a.stored += s.Space.TombstonedBytes + s.Space.IncompleteBytes
-		} else {
+		default:
 			a.stored += storedNow(s.Space)
 		}
 		a.need += est.Bytes
@@ -111,9 +117,9 @@ func (d *Daemon) storageViews(ctx context.Context, list []apiv1.Storage, overrid
 				AvailableBytes: avail, Unlimited: est.Unlimited, DailyGrowthBytes: est.DailyGrowth}
 			fit.Fits = !est.Unlimited && a.need <= avail
 			s.Space.Retention = fit
-			var others []string
-			for _, j := range a.members {
-				if j != i {
+			var others []string // the other storages that need space too
+			for l, j := range a.members {
+				if j != i && a.estimates[l].Bytes > 0 {
 					others = append(others, list[j].ID)
 				}
 			}
@@ -153,6 +159,13 @@ func (d *Daemon) backupTimes(ctx context.Context, storeID string) map[string][]i
 // are never removed are warned about.
 const fullSoon = 30 * 24 * time.Hour
 
+// How retention warnings begin.
+const (
+	doesNotFit            = "retention does not fit in the cloud account"
+	neverRemovedPrune     = "prune-backups is not set, so offsite backups are never removed"
+	neverRemovedImmutable = "rclone-immutable is set, so offsite backups are never removed"
+)
+
 // retentionWarning explains why a storage's retention does not fit in its
 // cloud account, or "" if it does. free is the account's free space,
 // growth what backups never removed add to it a day, and others the
@@ -162,8 +175,12 @@ func retentionWarning(cfg *config.Storage, fit *apiv1.RetentionFit, free, growth
 		if growth <= 0 || time.Duration(float64(max(free, 0))/float64(growth)*float64(24*time.Hour)) >= fullSoon {
 			return ""
 		}
-		return fmt.Sprintf("prune-backups is not set, so offsite backups are never removed: at about %s a day, the cloud account is full in %s. Set prune-backups on the storage, or free space",
-			textfmt.Bytes(growth), days(time.Duration(float64(max(free, 0))/float64(growth)*float64(24*time.Hour))))
+		why, fix := neverRemovedPrune, "Set prune-backups on the storage, or free space"
+		if cfg.Immutable {
+			why, fix = neverRemovedImmutable, "Free space"
+		}
+		return fmt.Sprintf("%s: at about %s a day, the cloud account is full in %s. %s", why,
+			textfmt.Bytes(growth), days(time.Duration(float64(max(free, 0))/float64(growth)*float64(24*time.Hour))), fix)
 	}
 	if fit.Fits {
 		return ""
@@ -174,10 +191,10 @@ func retentionWarning(cfg *config.Storage, fit *apiv1.RetentionFit, free, growth
 		settings += " plus " + days(retention.RecycleBinHold) + " in the recycle bin (rclone-recycle-bin)"
 	}
 	need := "about " + textfmt.Bytes(fit.NeedBytes)
-	if len(others) > 0 {
+	if len(others) > 0 && fit.TotalNeedBytes != fit.NeedBytes {
 		need += fmt.Sprintf(", %s together with %s on the same account", textfmt.Bytes(fit.TotalNeedBytes), strings.Join(slices.Sorted(slices.Values(others)), ", "))
 	}
-	return fmt.Sprintf("retention does not fit in the cloud account: it stores up to %d backups of a guest at once (%s), %s, but the account has about %s for backups (%s free, %s stored now). Keep fewer backups, shorten rclone-min-age or rclone-delete-grace, or free space",
+	return fmt.Sprintf(doesNotFit+": it stores up to %d backups of a guest at once (%s), %s, but the account has about %s for backups (%s free, %s stored now). Keep fewer backups, shorten rclone-min-age or rclone-delete-grace, or free space",
 		fit.PerGuest, settings, need, textfmt.Bytes(fit.AvailableBytes), textfmt.Bytes(max(free, 0)), textfmt.Bytes(fit.AvailableBytes-max(free, 0)))
 }
 
@@ -199,13 +216,19 @@ func days(d time.Duration) string {
 // its retention does not fit in its cloud account. It uses the catalogue
 // and the last known quota, without network access.
 func (d *Daemon) retentionAdvice(ctx context.Context, cfg *config.Storage) []string {
+	// The catalogue of a storage bound to another repository or source
+	// says nothing about its new one; a new storage has none.
+	cur, ok := d.storages.Config(cfg.ID)
+	if !ok || cur.Remote != cfg.Remote || cur.Path != cfg.Path || cur.Encryption != cfg.Encryption || cur.Source != cfg.Source {
+		return nil
+	}
 	list := d.storageViews(ctx, d.storages.List(), cfg)
 	for _, s := range list {
 		if s.ID != cfg.ID || s.Space == nil || s.Space.Retention == nil {
 			continue
 		}
 		for _, w := range s.Warnings {
-			if strings.HasPrefix(w, "retention does not fit") || strings.HasPrefix(w, "prune-backups is not set") {
+			if strings.HasPrefix(w, doesNotFit) || strings.HasPrefix(w, neverRemovedPrune) || strings.HasPrefix(w, neverRemovedImmutable) {
 				return []string{w}
 			}
 		}

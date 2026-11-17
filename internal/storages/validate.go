@@ -175,7 +175,12 @@ func (m *Manager) Validate(ctx context.Context, id string, req apiv1.ValidateReq
 		}
 	}
 
-	if sc.Base.PruneBackups == nil {
+	var advice []string
+	if m.opts.Advise != nil {
+		advice = m.opts.Advise(ctx, sc)
+	}
+	// Without prune-backups, the advice says when the account is full.
+	if sc.Base.PruneBackups == nil && len(advice) == 0 {
 		resp.Warnings = append(resp.Warnings, "prune-backups is not set: offsite backups are kept until deleted")
 	}
 	if len(sc.ReplicateFrom) == 0 {
@@ -184,9 +189,7 @@ func (m *Manager) Validate(ctx context.Context, id string, req apiv1.ValidateReq
 	if sc.Immutable {
 		resp.Warnings = append(resp.Warnings, "rclone-immutable is set: offsite backups cannot be deleted through this storage")
 	}
-	if m.opts.Advise != nil {
-		resp.Warnings = append(resp.Warnings, m.opts.Advise(ctx, sc)...)
-	}
+	resp.Warnings = append(resp.Warnings, advice...)
 	m.Wake()
 	return resp, nil
 }

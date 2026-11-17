@@ -5,6 +5,7 @@ package retention
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -41,6 +42,9 @@ var footprints sync.Map // footprintKey → int
 // its retention runs: it runs while PVE validates a storage change.
 const footprintBudget = 1_000_000
 
+// maxHistory is the longest history simulated.
+const maxHistory = 20 * 366 * 24 * time.Hour
+
 // Footprint returns how many backups of a guest that is backed up every
 // interval are stored at most, once retention has settled: those it keeps
 // under keep and the rails rclone-min-age and rclone-keep-min, those it
@@ -57,8 +61,7 @@ func Footprint(keep config.PruneOptions, minAge time.Duration, keepMin int, hold
 	if keep.IsKeepAll() {
 		return 0
 	}
-	const day = 24 * time.Hour
-	interval = min(max(interval.Round(time.Hour), time.Hour), 366*day)
+	interval = clampInterval(interval)
 	k := footprintKey{keep: keep, minAge: minAge, hold: hold, interval: interval, keepMin: keepMin}
 	if n, ok := footprints.Load(k); ok {
 		return n.(int)
@@ -68,23 +71,44 @@ func Footprint(keep config.PruneOptions, minAge time.Duration, keepMin int, hold
 	return n
 }
 
+// clampInterval rounds the time between backups to the hour, between an
+// hour and a year.
+func clampInterval(d time.Duration) time.Duration {
+	return min(max(d.Round(time.Hour), time.Hour), 366*24*time.Hour)
+}
+
 func simulate(keep config.PruneOptions, minAge time.Duration, keepMin int, hold, interval time.Duration) int {
 	const day = 24 * time.Hour
+	// Durations and counts beyond the simulated history change nothing, and
+	// capping them keeps the arithmetic below from overflowing.
+	minAge, hold = min(minAge, maxHistory), min(hold, maxHistory)
+	count := func(n int, unit time.Duration) int { return min(max(n, 0), int(maxHistory/unit)+1) }
+	last, hourly, daily := count(keep.KeepLast, interval), count(keep.KeepHourly, time.Hour), count(keep.KeepDaily, day)
+	weekly, monthly, yearly := count(keep.KeepWeekly, 7*day), count(keep.KeepMonthly, 31*day), count(keep.KeepYearly, 366*day)
+	least := count(keepMin, interval)
+
 	// At a retention run, at most kept backups are kept: each keep option
 	// and rclone-keep-min keep at most their count, rclone-min-age those
 	// younger than it. Until the next run a day of new backups is added,
 	// and those removed within hold are still held: as many as were added
 	// meanwhile, plus however many fewer are kept than at most.
-	kept := keep.KeepLast + keep.KeepHourly + keep.KeepDaily + keep.KeepWeekly + keep.KeepMonthly + keep.KeepYearly +
-		keepMin + int(minAge/interval) + 1
+	kept := last + hourly + daily + weekly + monthly + yearly + least + int(minAge/interval) + 1
 	bound := 2*kept + int((hold+2*day)/interval) + 2
 
 	// Long enough for every bucket to fill and the rails and grace periods
-	// to pass, at most 20 years; then a period of the coarsest bucket.
-	span := max(time.Duration(keep.KeepLast)*interval, time.Duration(keep.KeepHourly)*time.Hour,
-		time.Duration(keep.KeepDaily)*day, time.Duration(keep.KeepWeekly)*7*day, time.Duration(keep.KeepMonthly)*31*day,
-		time.Duration(keep.KeepYearly)*366*day, time.Duration(keepMin)*interval)
-	span = min(span+minAge+hold+2*day, 20*366*day)
+	// to pass, at most maxHistory; then a period of the coarsest bucket. A
+	// bucket fills only once a backup falls into it, and a coarser option
+	// keeps buckets older than those of the finer ones, so their spans add
+	// up, with one more bucket for one partly covered.
+	tier := func(n int, unit time.Duration) time.Duration {
+		if n == 0 {
+			return 0
+		}
+		return time.Duration(n+1) * max(unit, interval)
+	}
+	span := tier(last, interval) + tier(hourly, time.Hour) + tier(daily, day) + tier(weekly, 7*day) +
+		tier(monthly, 31*day) + tier(yearly, 366*day) + tier(least, interval)
+	span = min(span+minAge+hold+2*day, maxHistory)
 	cycle := day
 	switch {
 	case keep.KeepYearly > 0:
@@ -96,7 +120,7 @@ func simulate(keep config.PruneOptions, minAge time.Duration, keepMin int, hold,
 	}
 	start := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
 	settled := start.Add(span)
-	end := settled.Add(max(cycle, interval) + minAge + hold + 2*day)
+	end := settled.Add(max(cycle, interval) + 2*day)
 
 	var alive []*Entry
 	var held []time.Time // when removed backups stop taking space, in order
@@ -153,8 +177,9 @@ type Estimate struct {
 	Bytes int64
 	// PerGuest is the largest Footprint of a guest.
 	PerGuest int
-	// Unlimited means prune-backups keeps every backup: nothing is
-	// removed, and the backups grow by about DailyGrowth bytes a day.
+	// Unlimited means nothing is ever removed, as prune-backups keeps
+	// every backup or the storage is immutable: the backups grow by about
+	// DailyGrowth bytes a day.
 	Unlimited   bool
 	DailyGrowth int64
 }
@@ -164,8 +189,13 @@ type Estimate struct {
 // backups of each guest ("qemu/100"), such as recent uploads, to tell
 // how often guests are backed up. Each guest's backups are taken to be
 // as large as the largest of its three newest, and as frequent as the
-// median gap between its newest ones (daily if unknown).
+// median gap between its newest ones (daily if unknown), but no more
+// often than rclone-min-interval lets them be uploaded. A storage that
+// does not upload adds nothing: the estimate is empty.
 func EstimateSpace(cfg *config.Storage, sizes []store.BackupSize, backupTimes map[string][]int64) Estimate {
+	if len(cfg.ReplicateFrom) == 0 {
+		return Estimate{}
+	}
 	type guest struct {
 		times []int64
 		sizes []store.BackupSize // newest last
@@ -191,7 +221,8 @@ func EstimateSpace(cfg *config.Storage, sizes []store.BackupSize, backupTimes ma
 	if cfg.RecycleBin {
 		hold += RecycleBinHold
 	}
-	est := Estimate{Unlimited: keep.IsKeepAll()}
+	// An immutable storage never deletes, whatever prune-backups says.
+	est := Estimate{Unlimited: keep.IsKeepAll() || cfg.Immutable}
 	for key, g := range guests {
 		if !g.live {
 			continue // being deleted
@@ -202,16 +233,32 @@ func EstimateSpace(cfg *config.Storage, sizes []store.BackupSize, backupTimes ma
 		for _, b := range g.sizes[max(len(g.sizes)-3, 0):] {
 			size = max(size, StoredSize(b, cfg.Encryption == "crypt"))
 		}
-		interval := cadence(append(g.times, backupTimes[key]...))
+		interval := clampInterval(max(cadence(append(g.times, backupTimes[key]...)), cfg.MinInterval))
 		if est.Unlimited {
-			est.DailyGrowth += int64(float64(size) * float64(24*time.Hour) / float64(interval))
+			est.DailyGrowth = addCapped(est.DailyGrowth, int64(float64(size)*float64(24*time.Hour)/float64(interval)))
 			continue
 		}
 		n := Footprint(keep, cfg.MinAge, cfg.KeepMin, hold, interval)
 		est.PerGuest = max(est.PerGuest, n)
-		est.Bytes += int64(n) * size
+		est.Bytes = addCapped(est.Bytes, mulCapped(int64(n), size))
 	}
 	return est
+}
+
+// addCapped and mulCapped add and multiply non-negative sizes, capping
+// the result instead of overflowing.
+func addCapped(a, b int64) int64 {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
+}
+
+func mulCapped(a, b int64) int64 {
+	if a != 0 && b > math.MaxInt64/a {
+		return math.MaxInt64
+	}
+	return a * b
 }
 
 // cadence returns the median gap between a guest's newest backups, a day

@@ -54,6 +54,10 @@ func TestRetentionWarning(t *testing.T) {
 	if got := retentionWarning(cfg, fit, 300<<30, 0, nil); got != want {
 		t.Fatalf("warning =\n%s\nwant\n%s", got, want)
 	}
+	// Another storage on the account that needs nothing is not mentioned.
+	if got := retentionWarning(cfg, fit, 300<<30, 0, []string{"office"}); strings.Contains(got, "together") {
+		t.Fatalf("warning with a storage that needs nothing = %s", got)
+	}
 	cfg.RecycleBin = true
 	fit.TotalNeedBytes += 100 << 30
 	if got := retentionWarning(cfg, fit, 300<<30, 0, []string{"office"}); !strings.Contains(got,
@@ -69,8 +73,14 @@ func TestRetentionWarning(t *testing.T) {
 	if got := retentionWarning(cfg, unlimited, 300<<30, 10<<30, nil); got != "" {
 		t.Fatalf("warning 30 days ahead = %s", got)
 	}
-	if got := retentionWarning(cfg, unlimited, 300<<30, 180<<30, nil); !strings.Contains(got, "at about 180.0 GiB a day, the cloud account is full in 1.7d") {
+	if got := retentionWarning(cfg, unlimited, 300<<30, 180<<30, nil); got !=
+		"prune-backups is not set, so offsite backups are never removed: at about 180.0 GiB a day, the cloud account is full in 1.7d. Set prune-backups on the storage, or free space" {
 		t.Fatalf("unlimited warning = %s", got)
+	}
+	cfg.Immutable = true
+	if got := retentionWarning(cfg, unlimited, 300<<30, 180<<30, nil); got !=
+		"rclone-immutable is set, so offsite backups are never removed: at about 180.0 GiB a day, the cloud account is full in 1.7d. Free space" {
+		t.Fatalf("immutable warning = %s", got)
 	}
 	if days(7*day) != "7d" || days(36*time.Hour) != "1.5d" || days(time.Hour) != "1h0m0s" || days(0) != "0" {
 		t.Fatal("days")

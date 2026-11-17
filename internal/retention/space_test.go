@@ -3,6 +3,7 @@
 package retention
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -40,10 +41,26 @@ func TestFootprint(t *testing.T) {
 		// whatever keep-last says, and the newest.
 		{"min-age", config.PruneOptions{KeepLast: 1}, 7 * day, 0, 0, day, 8},
 		{"keep-all", config.PruneOptions{KeepAll: true}, 0, 0, 0, day, 0},
+		// keep-daily=7 means the 7 newest days with a backup: 7 weeks of
+		// weekly ones, and 4 weeks before them.
+		{"weekly backups, daily and weekly", config.PruneOptions{KeepDaily: 7, KeepWeekly: 4}, 0, 0, 0, 7 * day, 12},
+		// Coarser buckets come after the finer ones: 14 days, 2 weeks
+		// before them, and the newest.
+		{"two tiers", config.PruneOptions{KeepDaily: 14, KeepWeekly: 2}, 0, 0, 0, day, 17},
+		{"months and years", config.PruneOptions{KeepMonthly: 24, KeepYearly: 2}, 0, 0, 0, day, 27},
 	} {
 		if got := Footprint(c.keep, c.minAge, c.keepMin, c.hold, c.iv); got != c.want {
 			t.Errorf("%s: %d backups, want %d", c.name, got, c.want)
 		}
+	}
+	// Beyond the 20 years simulated, as many as fit in them, without
+	// overflowing: a yearly backup for each of them, and every monthly
+	// one held all that time.
+	if got := Footprint(config.PruneOptions{KeepYearly: 300}, 0, 0, 0, day); got < 20 || got > 23 {
+		t.Errorf("keep-yearly=300: %d backups", got)
+	}
+	if got := Footprint(config.PruneOptions{KeepLast: 1}, 0, 0, 1<<62, 30*day); got < 20*12 || got > 21*13 {
+		t.Errorf("a grace period of over a century: %d backups", got)
 	}
 }
 
@@ -64,7 +81,8 @@ func TestFootprintIsBounded(t *testing.T) {
 
 func TestEstimateSpace(t *testing.T) {
 	keep := &config.PruneOptions{KeepDaily: 7, KeepWeekly: 4}
-	cfg := &config.Storage{Base: config.BaseOptions{PruneBackups: keep}, MinAge: 7 * day, KeepMin: 1, DeleteGrace: 7 * day, Encryption: "none"}
+	cfg := &config.Storage{Base: config.BaseOptions{PruneBackups: keep}, MinAge: 7 * day, KeepMin: 1, DeleteGrace: 7 * day,
+		Encryption: "none", ReplicateFrom: []string{"local"}}
 	at := func(d int) int64 { return time.Date(2026, 10, d, 21, 0, 0, 0, time.UTC).Unix() }
 	var sizes []store.BackupSize
 	// Guest 100: nightly, growing to 100 GiB. Guest 101: one backup, 80 GiB,
@@ -91,11 +109,41 @@ func TestEstimateSpace(t *testing.T) {
 	if got := StoredSize(sizes[0], true); got != 90*transport.CryptStoredSize(1<<30)+transport.CryptStoredSize(1<<30) {
 		t.Fatalf("stored size = %d", got)
 	}
-	// Without prune-backups nothing is removed: about a backup a day of
-	// guest 100 and a seventh of guest 101's.
-	cfg.Encryption, cfg.Base.PruneBackups = "none", nil
+	// rclone-min-interval uploads guest 100 weekly only.
+	cfg.Encryption, cfg.MinInterval = "none", 7*day
+	if est := EstimateSpace(cfg, sizes, times); est.Bytes != int64(weekly)*(180<<30) {
+		t.Fatalf("estimate with rclone-min-interval = %+v", est)
+	}
+	cfg.MinInterval = 0
+	// Without prune-backups, or on an immutable storage, nothing is
+	// removed: about a backup a day of guest 100 and a seventh of guest
+	// 101's.
+	cfg.Base.PruneBackups = nil
 	if est := EstimateSpace(cfg, sizes, times); !est.Unlimited || est.DailyGrowth != 100<<30+(80<<30)/7 {
 		t.Fatalf("unlimited estimate = %+v", est)
+	}
+	cfg.Base.PruneBackups, cfg.Immutable = keep, true
+	if est := EstimateSpace(cfg, sizes, times); !est.Unlimited || est.Bytes != 0 || est.DailyGrowth != 100<<30+(80<<30)/7 {
+		t.Fatalf("immutable estimate = %+v", est)
+	}
+	cfg.Immutable = false
+	// Backups seconds apart count as hourly at most.
+	burst := []store.BackupSize{
+		{VMType: "qemu", VMID: 100, BackupTime: at(1), State: "complete", ArchiveSize: 1 << 30, SegmentSize: 1 << 30, SegmentCount: 1},
+		{VMType: "qemu", VMID: 100, BackupTime: at(1) + 10, State: "complete", ArchiveSize: 1 << 30, SegmentSize: 1 << 30, SegmentCount: 1},
+	}
+	cfg.Base.PruneBackups = nil
+	if est := EstimateSpace(cfg, burst, nil); est.DailyGrowth != 24<<30 {
+		t.Fatalf("growth from backups seconds apart = %d", est.DailyGrowth)
+	}
+	// A storage that does not upload adds nothing.
+	cfg.ReplicateFrom = nil
+	if est := EstimateSpace(cfg, sizes, times); est != (Estimate{}) {
+		t.Fatalf("estimate of a storage that does not upload = %+v", est)
+	}
+	// Sizes beyond int64 are capped.
+	if addCapped(math.MaxInt64-1, 2) != math.MaxInt64 || mulCapped(1<<40, 1<<40) != math.MaxInt64 || mulCapped(0, 1<<62) != 0 {
+		t.Fatal("capped arithmetic")
 	}
 }
 

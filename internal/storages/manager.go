@@ -55,6 +55,9 @@ type Options struct {
 	ResyncTimeout time.Duration
 	// Tick is how often storage.cfg is checked for changes (default 5s).
 	Tick time.Duration
+	// RefreshDelay is how soon RefreshUsage refreshes a quota (default
+	// 15s), so that a burst of deletions or uploads makes one query.
+	RefreshDelay time.Duration
 	// OnChange is called after a storage's state changed.
 	OnChange func(id string)
 	// Advise, if set, adds warnings about a valid storage configuration,
@@ -141,6 +144,7 @@ func New(opts Options) *Manager {
 	opts.OpenTimeout = cmp.Or(opts.OpenTimeout, 2*time.Minute)
 	opts.ResyncTimeout = cmp.Or(opts.ResyncTimeout, time.Hour)
 	opts.Tick = cmp.Or(opts.Tick, 5*time.Second)
+	opts.RefreshDelay = cmp.Or(opts.RefreshDelay, 15*time.Second)
 	return &Manager{opts: opts, log: opts.Log, wake: make(chan struct{}, 1), entries: map[string]*entry{}}
 }
 
@@ -581,6 +585,20 @@ func (m *Manager) about(ctx context.Context, e *entry) {
 	}
 	m.mu.Unlock()
 	m.persist(ctx, e)
+}
+
+// RefreshUsage refreshes the quota of the storages on a remote soon (within
+// RefreshDelay), after a deletion freed space there or an upload took
+// some: the space retention can count on depends on it.
+func (m *Manager) RefreshUsage(remote string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	at := m.opts.Now().Add(m.opts.RefreshDelay)
+	for _, e := range m.entries {
+		if e.cfg != nil && e.cfg.Remote == remote && e.nextAbout.After(at) {
+			e.nextAbout = at
+		}
+	}
 }
 
 // RequestResync schedules a catalogue resync of a storage.

@@ -216,7 +216,12 @@ func Run(ctx context.Context, opts Options) error {
 	runner := replicate.New(replicate.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Repos: d.storages.Repo,
 		Identity: d.identity,
-		OnCommit: func(b *store.Backup) { d.api.Events().Publish("backup.added", backupView(b)) },
+		OnCommit: func(b *store.Backup) {
+			d.api.Events().Publish("backup.added", backupView(b))
+			if cfg, ok := d.storages.Config(b.StoreID); ok {
+				d.storages.RefreshUsage(cfg.Remote)
+			}
+		},
 	})
 	d.scheduler = jobs.New(jobs.Options{
 		Log: d.log, Store: st, Node: opts.Node, Workers: ncfg.UploadWorkers, Targets: d.storages.Targets,
@@ -387,9 +392,14 @@ func (d *Daemon) replicationReady(id string) error {
 
 // spaceFreed lets uploads paused because a storage's remote was full try
 // again now, rather than when the pause would have ended: a deletion just
-// freed space there.
+// freed space there. The remote's quota is refreshed soon.
 func (d *Daemon) spaceFreed(storeID string) {
-	if cfg, ok := d.storages.Config(storeID); ok && d.scheduler != nil {
+	cfg, ok := d.storages.Config(storeID)
+	if !ok {
+		return
+	}
+	d.storages.RefreshUsage(cfg.Remote)
+	if d.scheduler != nil {
 		d.scheduler.ResumeRemote(context.Background(), cfg.Remote)
 	}
 }
