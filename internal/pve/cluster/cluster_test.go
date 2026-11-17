@@ -54,17 +54,18 @@ func TestVMListAndTags(t *testing.T) {
 func TestMembers(t *testing.T) {
 	dir := t.TempDir()
 	m, err := ReadMembers(dir, "pve2")
-	if err != nil || m.Primary() != "pve2" {
+	if err != nil || m.Primary() != "pve2" || !slices.Equal(m.All, []string{"pve2"}) {
 		t.Fatalf("standalone = %+v, %v", m, err)
 	}
 	write(t, filepath.Join(dir, ".members"), `{"nodename":"pve2","version":9,"cluster":{"name":"lab","quorate":1},
 		"nodelist":{"pve3":{"id":3,"online":1},"pve1":{"id":1,"online":0},"pve2":{"id":2,"online":1}}}`)
 	m, err = ReadMembers(dir, "pve2")
-	if err != nil || !slices.Equal(m.Online, []string{"pve2", "pve3"}) || m.Primary() != "pve2" {
+	if err != nil || !slices.Equal(m.Online, []string{"pve2", "pve3"}) || m.Primary() != "pve2" ||
+		!slices.Equal(m.All, []string{"pve1", "pve2", "pve3"}) {
 		t.Fatalf("cluster = %+v, %v", m, err)
 	}
 	write(t, filepath.Join(dir, ".members"), `{"nodename":"pve2","version":1}`)
-	if m, _ := ReadMembers(dir, "pve2"); !slices.Equal(m.Online, []string{"pve2"}) {
+	if m, _ := ReadMembers(dir, "pve2"); !slices.Equal(m.Online, []string{"pve2"}) || !slices.Equal(m.All, []string{"pve2"}) {
 		t.Fatalf("standalone .members = %+v", m)
 	}
 }

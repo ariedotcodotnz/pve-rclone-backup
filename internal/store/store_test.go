@@ -842,3 +842,42 @@ func TestNonPositiveLimitMeansUnlimited(t *testing.T) {
 		t.Errorf("DirtyBackups(2) = %d entries", len(dirty))
 	}
 }
+
+func TestIncompleteUploads(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	if err := s.PutStorage(ctx, &StorageRow{StoreID: "offsite", Remote: "od", BasePath: "pve-backups", Source: "homelab", ConfigHash: "h1"}); err != nil {
+		t.Fatal(err)
+	}
+	up := func(dir, fp string) IncompleteUpload {
+		return IncompleteUpload{RemoteDir: dir, State: "incomplete", VMType: "qemu", VMID: 100, BackupTime: 1, Files: 2, StoredBytes: 10, Fingerprint: fp}
+	}
+	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("a", "1"), up("b", "1"), up("c", "1")}, 100); err != nil {
+		t.Fatal(err)
+	}
+	// a is unchanged, b changed, c is gone and d is new.
+	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("a", "1"), up("b", "2"), up("d", "1")}, 200); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListIncomplete(ctx, "offsite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, u := range list {
+		got = append(got, fmt.Sprintf("%s:%d:%d", u.RemoteDir, u.FirstSeenAt, u.ChangedAt))
+	}
+	if strings.Join(got, " ") != "a:100:100 b:100:200 d:200:200" {
+		t.Fatalf("incomplete uploads = %v", got)
+	}
+	if err := s.DeleteIncomplete(ctx, "offsite", "a"); err != nil {
+		t.Fatal(err)
+	}
+	// Removing the storage forgets its uploads.
+	if err := s.DeleteStorage(ctx, "offsite"); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := s.ListIncomplete(ctx, "offsite"); err != nil || len(list) != 0 {
+		t.Fatalf("after removing the storage: %+v, %v", list, err)
+	}
+}

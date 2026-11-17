@@ -88,6 +88,9 @@ func Run(ctx context.Context, c *client.Client) []Check {
 				if level, msg := space(s); msg != "" {
 					add(level, "space "+s.ID, "%s", msg)
 				}
+				for _, w := range s.Warnings {
+					add(Warn, "space "+s.ID, "%s", w)
+				}
 			}
 		}
 	}
@@ -119,6 +122,10 @@ func space(s apiv1.Storage) (level, message string) {
 		backups = textfmt.Backups(sp.Backups, sp.BackupBytes, sp.Tombstoned, sp.TombstonedBytes)
 	}
 	message = "backups " + backups
+	if sp := s.Space; sp != nil && sp.Incomplete+sp.InProgress > 0 {
+		message += fmt.Sprintf("; incomplete uploads %s, of which %s in progress",
+			textfmt.Bytes(sp.IncompleteBytes+sp.InProgressBytes), textfmt.Bytes(sp.InProgressBytes))
+	}
 	level = OK
 	if u := s.Usage; u != nil {
 		message += "; account " + textfmt.Account(u.Total, u.Used, u.Free, u.Trashed) +

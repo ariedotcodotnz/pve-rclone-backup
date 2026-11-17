@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -44,11 +45,15 @@ func (a *App) storageCommand() *cobra.Command {
 			if a.Output == "json" {
 				return a.json(s)
 			}
-			fmt.Fprintf(a.Out, "Storage:      %s\nHealth:       %s %s\nActive:       %s\nLocation:     %s:%s\nSource:       %s\nEncryption:   %s\nRepository:   %s (generation %d)\nReplicates:   %s\nResynced:     %s\nBackups:      %s\nAccount:      %s\nRecovery kit: %s\n",
+			fmt.Fprintf(a.Out, "Storage:      %s\nHealth:       %s %s\nActive:       %s\nLocation:     %s:%s\nSource:       %s\nEncryption:   %s\nRepository:   %s (generation %d)\nReplicates:   %s\nResynced:     %s\nBackups:      %s\nUploads:      %s\nAccount:      %s\nRecovery kit: %s\n",
 				s.ID, s.Health, s.HealthDetail, yesNo(s.Active), s.Remote, s.Path, s.Source, s.Encryption, dash(s.RepoUUID), s.Generation,
-				dash(strings.Join(s.ReplicateFrom, ", ")), humanTime(s.LastResyncAt), backupsString(s.Space), accountString(s.Usage), kitString(s))
+				dash(strings.Join(s.ReplicateFrom, ", ")), humanTime(s.LastResyncAt), backupsString(s.Space), incompleteString(s.Space),
+				accountString(s.Usage), kitString(s))
 			if s.ConfigError != "" {
 				fmt.Fprintln(a.Out, "Config error:", s.ConfigError)
+			}
+			for _, w := range s.Warnings {
+				fmt.Fprintln(a.Out, "Warning:", w)
 			}
 			return nil
 		}},
@@ -76,8 +81,128 @@ func (a *App) storageCommand() *cobra.Command {
 			fmt.Fprintln(a.Out, "Catalogue resync scheduled.")
 			return nil
 		}},
+		a.incompleteCommand(),
 	)
 	return cmd
+}
+
+func (a *App) incompleteCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "incomplete",
+		Short: "List and remove uploads that never finished",
+		Long: `An upload that never finishes leaves the segments it uploaded in the cloud, where they take quota
+but are never listed as a backup: for example when the local archive was pruned before the upload
+finished (source_lost), or when a job failed or was cancelled. Each catalogue resync finds them.
+
+They are removed automatically once nothing has changed in them for incomplete-upload-grace
+(7 days by default) and no upload job of this node works on them; those whose local archive is gone
+are removed at the next resync. In a cluster, a node only removes its own jobs' uploads
+automatically. 'purge' removes them now.`,
+	}
+	list := &cobra.Command{Use: "list <storage>", Short: "List incomplete uploads, as of the last resync", Args: exactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var list []apiv1.IncompleteUpload
+			if err := a.do(cmd.Context(), http.MethodGet, "/v1/storages/"+url.PathEscape(args[0])+"/incomplete", nil, &list); err != nil {
+				return err
+			}
+			if a.Output == "json" {
+				return a.json(list)
+			}
+			var s apiv1.Storage
+			if err := a.do(cmd.Context(), http.MethodGet, "/v1/storages/"+url.PathEscape(args[0]), nil, &s); err != nil {
+				return err
+			}
+			rows := make([][]string, 0, len(list))
+			var total int64
+			for _, u := range list {
+				total += u.Bytes
+				rows = append(rows, []string{u.Dir, fmt.Sprintf("%s/%d", u.VMType, u.VMID), u.State, strconv.Itoa(u.Files),
+					humanBytes(u.Bytes), humanTime(&u.UnchangedSince), incompleteJob(u), incompleteRemoval(u)})
+			}
+			a.table([]string{"DIRECTORY", "GUEST", "STATE", "FILES", "SIZE", "UNCHANGED SINCE", "UPLOAD JOB", "REMOVAL"}, rows)
+			fmt.Fprintf(a.Out, "\n%s, %s, as of the resync at %s.\n", uploads(len(list)), humanBytes(total), humanTime(s.LastResyncAt))
+			return nil
+		}}
+	var dryRun bool
+	purge := &cobra.Command{
+		Use:   "purge <storage> [<directory>...]",
+		Short: "Remove incomplete uploads now",
+		Long: `Removes the named incomplete uploads, or every one that no upload job of this node works on. In a
+cluster, an upload another node is still working on starts again from the beginning.`,
+		Args: minArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := apiv1.PurgeIncompleteRequest{Dirs: args[1:], DryRun: true}
+			path := "/v1/storages/" + url.PathEscape(args[0]) + "/incomplete/purge"
+			var out []apiv1.PurgedUpload
+			if err := a.do(cmd.Context(), http.MethodPost, path, req, &out); err != nil {
+				return err
+			}
+			var total int64
+			for _, u := range out {
+				total += u.Bytes
+			}
+			if !dryRun && len(out) > 0 {
+				ok, err := a.confirm(fmt.Sprintf("Remove %s (%s) from %s?", uploads(len(out)), humanBytes(total), args[0]))
+				if err != nil || !ok {
+					return err
+				}
+				req.DryRun = false
+				if err := a.do(cmd.Context(), http.MethodPost, path, req, &out); err != nil {
+					return err
+				}
+			}
+			if a.Output == "json" {
+				return a.json(out)
+			}
+			rows := make([][]string, 0, len(out))
+			for _, u := range out {
+				job := "-"
+				if u.PurgeJob != 0 {
+					job = strconv.FormatInt(u.PurgeJob, 10)
+				}
+				rows = append(rows, []string{u.Dir, fmt.Sprintf("%s/%d", u.VMType, u.VMID), humanBytes(u.Bytes), job})
+			}
+			a.table([]string{"DIRECTORY", "GUEST", "SIZE", "DELETE JOB"}, rows)
+			verb := "Removing"
+			if dryRun {
+				verb = "Would remove"
+			}
+			fmt.Fprintf(a.Out, "\n%s %s, %s.\n", verb, uploads(len(out)), humanBytes(total))
+			return nil
+		},
+	}
+	purge.Flags().BoolVar(&dryRun, "dry-run", false, "only show what would be removed")
+	cmd.AddCommand(list, purge)
+	return cmd
+}
+
+// uploads counts incomplete uploads.
+func uploads(n int) string {
+	if n == 1 {
+		return "1 incomplete upload"
+	}
+	return fmt.Sprintf("%d incomplete uploads", n)
+}
+
+// incompleteJob describes the upload job of an incomplete upload.
+func incompleteJob(u apiv1.IncompleteUpload) string {
+	if u.Job == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d (%s)", u.Job, u.JobState)
+}
+
+// incompleteRemoval says when an incomplete upload is removed.
+func incompleteRemoval(u apiv1.IncompleteUpload) string {
+	switch {
+	case u.InUse:
+		return "in use"
+	case u.State == "deleting":
+		return "being deleted"
+	case u.RemoveAfter != nil:
+		return humanTime(u.RemoveAfter)
+	}
+	return "by purge only"
 }
 
 // pvesh runs (or with print only shows) a pvesh command.

@@ -63,6 +63,11 @@ func (a *App) statusCommand() *cobra.Command {
 					backups, used, free, humanTime(s.LastResyncAt), kitString(s)})
 			}
 			a.table([]string{"STORAGE", "HEALTH", "ACTIVE", "LOCATION", "SOURCE", "BACKUPS", "ACCOUNT USED", "ACCOUNT FREE", "RESYNCED", "KIT"}, rows)
+			for _, s := range storages {
+				for _, w := range s.Warnings {
+					fmt.Fprintf(a.Out, "Warning: %s: %s\n", s.ID, w)
+				}
+			}
 			if account {
 				fmt.Fprintln(a.Out, "\nBACKUPS is what the storage's backups take in the cloud. ACCOUNT is the quota of the whole\n"+
 					"cloud account, which other files count towards too; Proxmox VE shows it as the storage's usage.")
@@ -105,6 +110,15 @@ func backupsString(sp *apiv1.StorageSpace) string {
 		return "-"
 	}
 	return textfmt.Backups(sp.Backups, sp.BackupBytes, sp.Tombstoned, sp.TombstonedBytes)
+}
+
+// incompleteString describes the space uploads without a manifest take.
+func incompleteString(sp *apiv1.StorageSpace) string {
+	if sp == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%d never finished, %s; %d in progress, %s", sp.Incomplete, humanBytes(sp.IncompleteBytes),
+		sp.InProgress, humanBytes(sp.InProgressBytes))
 }
 
 func kitString(s apiv1.Storage) string {

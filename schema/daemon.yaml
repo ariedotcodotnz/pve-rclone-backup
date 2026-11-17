@@ -43,3 +43,15 @@ properties:
     title: Retention Time
     description: Local time of day at which scheduled retention runs.
     default: '05:00'
+
+  - key: incomplete-upload-grace
+    field: IncompleteUploadGrace
+    type: duration
+    allow_off: true
+    title: Incomplete Upload Grace Period
+    description: >-
+      Uploads that never finished are removed from the cloud once what they uploaded has not changed
+      for this long and no upload job of this node works on them; uploads whose local archive is gone
+      are removed at the next resync. In a cluster, only uploads of this node's own jobs are removed.
+      "off" never removes them automatically.
+    default: 7d

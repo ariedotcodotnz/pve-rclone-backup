@@ -121,6 +121,9 @@ type Storage struct {
 	Usage *Usage `json:"usage,omitempty"`
 	// Space is what the storage's backups take in the cloud.
 	Space *StorageSpace `json:"space,omitempty"`
+	// Warnings are problems that need the operator, such as uploads that
+	// never finished taking space.
+	Warnings []string `json:"warnings,omitempty"`
 	// KitConfirmed reports a confirmed recovery kit for the repository;
 	// replication of encrypted repositories waits for it.
 	KitConfirmed bool `json:"kit_confirmed"`
@@ -135,6 +138,13 @@ type StorageSpace struct {
 	// ends.
 	Tombstoned      int   `json:"tombstoned"`
 	TombstonedBytes int64 `json:"tombstoned_bytes"`
+	// Backup directories without a manifest, as of the last resync: uploads
+	// that never finished (Incomplete), and those an upload job of this
+	// node still works on (InProgress). They are not listed as backups.
+	Incomplete      int   `json:"incomplete"`
+	IncompleteBytes int64 `json:"incomplete_bytes"`
+	InProgress      int   `json:"in_progress"`
+	InProgressBytes int64 `json:"in_progress_bytes"`
 }
 
 // StoredBytes returns the bytes of all catalogued backups, including those
@@ -167,6 +177,42 @@ type Usage struct {
 	Free      *int64    `json:"free,omitempty"`
 	Trashed   *int64    `json:"trashed,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// IncompleteUpload is a backup directory without a manifest, as found by
+// the last resync: an upload under way or one that never finished, or a
+// deletion that stopped half-way ("deleting"). What it holds takes quota
+// but is never listed as a backup.
+type IncompleteUpload struct {
+	Dir            string    `json:"dir"`   // g<N>/v1/<source>/<type>/<vmid>/<timestamp>[.<n>]
+	State          string    `json:"state"` // incomplete | deleting
+	VMType         string    `json:"vmtype"`
+	VMID           int       `json:"vmid"`
+	CTime          int64     `json:"ctime"` // backup time (Unix seconds)
+	Files          int       `json:"files"`
+	Bytes          int64     `json:"bytes"` // as stored
+	FirstSeenAt    time.Time `json:"first_seen_at"`
+	UnchangedSince time.Time `json:"unchanged_since"` // its files were last seen to change
+	// Job is this node's newest upload job of the archive, if any; InUse
+	// means it still works on the directory.
+	Job      int64  `json:"job,omitzero"`
+	JobState string `json:"job_state,omitempty"`
+	InUse    bool   `json:"in_use"`
+	// RemoveAfter is when it is removed automatically
+	// (incomplete-upload-grace); nil if it is not.
+	RemoveAfter *time.Time `json:"remove_after,omitempty"`
+}
+
+// PurgeIncompleteRequest removes incomplete uploads of a storage.
+type PurgeIncompleteRequest struct {
+	Dirs   []string `json:"dirs,omitempty"` // empty: every one no upload job works on
+	DryRun bool     `json:"dry_run"`
+}
+
+// PurgedUpload is an incomplete upload a purge removes.
+type PurgedUpload struct {
+	IncompleteUpload
+	PurgeJob int64 `json:"purge_job,omitzero"` // the delete job removing it (not for a dry run)
 }
 
 // StorageStatus answers PVE's status() poll. It is served from cached state

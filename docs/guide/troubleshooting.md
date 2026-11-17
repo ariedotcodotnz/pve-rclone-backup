@@ -76,9 +76,21 @@ below. Space usually goes to:
   [`rclone-min-age`](../reference/storage-properties.md#rclone-min-age) and deletes it only after
   [`rclone-delete-grace`](../reference/storage-properties.md#rclone-delete-grace), 14 days in total
   by default. `--state tombstoned` lists those marked for deletion.
-- **Uploads that never finished.** `pve-rclone-backup queue list --state failed,cancelled,source_lost`
-  lists them. What they uploaded stays in the cloud but is not listed in Proxmox VE. The
-  `catalogue resynced` line in the daemon log counts them as `incomplete`.
+- **Uploads that never finished.** An upload whose local archive was pruned before it finished
+  (`source_lost`), or whose job failed or was cancelled, leaves what it uploaded in the cloud,
+  where it is not listed in Proxmox VE. `status` warns about them and `doctor` reports how much
+  space they take; to list and remove them:
+
+    ```sh
+    pve-rclone-backup storage incomplete list offsite
+    pve-rclone-backup storage incomplete purge offsite              # every one no upload works on
+    ```
+
+    They are also removed automatically: at the next resync once their archive is gone, otherwise
+    once they have not changed for
+    [`incomplete-upload-grace`](../reference/daemon-settings.md#incomplete-upload-grace) (7 days).
+    In a cluster, a node removes only its own jobs' uploads automatically, as it cannot tell
+    whether another node is still working on the others.
 
 ### Uploads are slow
 

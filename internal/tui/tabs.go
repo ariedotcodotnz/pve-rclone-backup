@@ -465,6 +465,9 @@ func storageDetail(s apiv1.Storage) string {
 	backups, account := "-", "-"
 	if sp := s.Space; sp != nil {
 		backups = tf.Backups(sp.Backups, sp.BackupBytes, sp.Tombstoned, sp.TombstonedBytes)
+		if sp.Incomplete > 0 {
+			backups += fmt.Sprintf("; %d uploads that never finished, %s", sp.Incomplete, tf.Bytes(sp.IncompleteBytes))
+		}
 	}
 	if s.Usage != nil {
 		account = usageText(s.Usage) + " (whole account, as of " + tf.Time(&s.Usage.UpdatedAt) + ")"

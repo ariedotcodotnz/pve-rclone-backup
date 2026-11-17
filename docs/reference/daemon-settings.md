@@ -17,6 +17,7 @@ The daemon reads the file when it starts, so restart it after a change: `systemc
 | [`health-interval`](#health-interval) | `5m` | How often remote connectivity is checked. |
 | [`catalog-resync-interval`](#catalog-resync-interval) | `6h` | How often the catalogue is rebuilt from remote manifests. |
 | [`retention-time`](#retention-time) | `05:00` | Local time of day at which scheduled retention runs. |
+| [`incomplete-upload-grace`](#incomplete-upload-grace) | `7d` | Uploads that never finished are removed from the cloud once what they uploaded has not changed for this long and no upload job of this node works on them; uploads whose local archive is gone are removed at the next resync. In a cluster, only uploads of this node's own jobs are removed. "off" never removes them automatically. |
 
 ## `log-level`
 
@@ -52,3 +53,10 @@ The daemon reads the file when it starts, so restart it after a change: `systemc
 
 - Value: text matching the regular expression `(?:[01][0-9]|2[0-3]):[0-5][0-9]`.
 - Default: `05:00`
+
+## `incomplete-upload-grace`
+
+**Incomplete Upload Grace Period.** Uploads that never finished are removed from the cloud once what they uploaded has not changed for this long and no upload job of this node works on them; uploads whose local archive is gone are removed at the next resync. In a cluster, only uploads of this node's own jobs are removed. "off" never removes them automatically.
+
+- Value: a duration: a number followed by `s`, `m`, `h`, `d` or `w` (seconds to weeks), such as `7d`, or `off`.
+- Default: `7d`

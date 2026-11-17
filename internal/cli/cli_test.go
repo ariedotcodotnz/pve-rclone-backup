@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -358,5 +359,51 @@ func TestVzdumpHook(t *testing.T) {
 	}
 	if _, err := os.Stat(hookChain); !os.IsNotExist(err) {
 		t.Fatal("chain file left")
+	}
+}
+
+func TestIncompleteCommands(t *testing.T) {
+	removeAfter := time.Date(2026, 11, 24, 21, 0, 0, 0, time.Local)
+	list := []apiv1.IncompleteUpload{
+		{Dir: "g1/v1/lab/lxc/100/2026_10_28-21_00_06", State: "incomplete", VMType: "lxc", VMID: 100, Files: 12, Bytes: 12 << 30,
+			Job: 7, JobState: "source_lost", RemoveAfter: &removeAfter},
+		{Dir: "g1/v1/lab/qemu/101/2026_11_17-21_00_00", State: "incomplete", VMType: "qemu", VMID: 101, Files: 3, Bytes: 3 << 30,
+			Job: 9, JobState: "uploading", InUse: true},
+	}
+	var purges []apiv1.PurgeIncompleteRequest
+	socket := fakeDaemon(t, map[string]api.HandlerFunc{
+		"GET /v1/storages/offsite/incomplete": func(w http.ResponseWriter, _ *http.Request) error { return api.WriteJSON(w, 200, list) },
+		"GET /v1/storages/offsite": func(w http.ResponseWriter, _ *http.Request) error {
+			return api.WriteJSON(w, 200, apiv1.Storage{ID: "offsite"})
+		},
+		"POST /v1/storages/offsite/incomplete/purge": func(w http.ResponseWriter, r *http.Request) error {
+			var req apiv1.PurgeIncompleteRequest
+			if err := api.DecodeJSON(r, &req); err != nil {
+				return err
+			}
+			purges = append(purges, req)
+			p := apiv1.PurgedUpload{IncompleteUpload: list[0]}
+			if !req.DryRun {
+				p.PurgeJob = 42
+			}
+			return api.WriteJSON(w, 200, []apiv1.PurgedUpload{p})
+		},
+	})
+	r := run(t, socket, nil, false, "storage", "incomplete", "list", "offsite")
+	if r.code != 0 || !strings.Contains(r.out, "lxc/100") || !strings.Contains(r.out, "7 (source_lost)") ||
+		!strings.Contains(r.out, "2026-11-24 21:00") || !strings.Contains(r.out, "in use") || !strings.Contains(r.out, "2 incomplete uploads, 15.0 GiB, as of") {
+		t.Fatalf("list (%d):\n%s%s", r.code, r.out, r.err)
+	}
+	// Purging asks first; without a terminal it needs --yes.
+	if r := run(t, socket, nil, false, "storage", "incomplete", "purge", "offsite"); r.code != ExitUsage || len(purges) != 1 || !purges[0].DryRun {
+		t.Fatalf("purge without --yes (%d): %+v\n%s%s", r.code, purges, r.out, r.err)
+	}
+	r = run(t, socket, nil, false, "--yes", "storage", "incomplete", "purge", "offsite", list[0].Dir)
+	if r.code != 0 || len(purges) != 3 || purges[2].DryRun || !slices.Equal(purges[2].Dirs, []string{list[0].Dir}) ||
+		!strings.Contains(r.out, "Removing 1 incomplete upload, 12.0 GiB") || !strings.Contains(r.out, "42") {
+		t.Fatalf("purge (%d): %+v\n%s%s", r.code, purges, r.out, r.err)
+	}
+	if r := run(t, socket, nil, false, "storage", "incomplete", "purge", "--dry-run", "offsite"); r.code != 0 || !strings.Contains(r.out, "Would remove 1") {
+		t.Fatalf("dry run (%d):\n%s%s", r.code, r.out, r.err)
 	}
 }

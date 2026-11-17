@@ -22,10 +22,12 @@ type DaemonConfig struct {
 	CatalogResyncInterval time.Duration
 	// RetentionTime (retention-time): Local time of day at which scheduled retention runs.
 	RetentionTime string
+	// IncompleteUploadGrace (incomplete-upload-grace): Uploads that never finished are removed from the cloud once what they uploaded has not changed for this long and no upload job of this node works on them; uploads whose local archive is gone are removed at the next resync. In a cluster, only uploads of this node's own jobs are removed. "off" never removes them automatically.
+	IncompleteUploadGrace Interval
 }
 
 // daemonConfigKeys lists the properties defined by this schema.
-var daemonConfigKeys = []string{"log-level", "about-interval", "health-interval", "catalog-resync-interval", "retention-time"}
+var daemonConfigKeys = []string{"log-level", "about-interval", "health-interval", "catalog-resync-interval", "retention-time", "incomplete-upload-grace"}
 
 // defaultDaemonConfig returns the settings with every default applied.
 func defaultDaemonConfig() *DaemonConfig {
@@ -35,6 +37,7 @@ func defaultDaemonConfig() *DaemonConfig {
 		HealthInterval:        mustDuration("5m"),
 		CatalogResyncInterval: mustDuration("6h"),
 		RetentionTime:         "05:00",
+		IncompleteUploadGrace: mustInterval("7d"),
 	}
 }
 
@@ -83,6 +86,14 @@ func decodeDaemonConfig(props map[string]Raw, consumed map[string]bool) (*Daemon
 			fail("retention-time", err)
 		} else {
 			c.RetentionTime = v
+		}
+	}
+	if r, ok := props["incomplete-upload-grace"]; ok {
+		consumed["incomplete-upload-grace"] = true
+		if v, err := decodeDuration(r, true); err != nil {
+			fail("incomplete-upload-grace", err)
+		} else {
+			c.IncompleteUploadGrace = v
 		}
 	}
 	return c, errors.Join(errs...)

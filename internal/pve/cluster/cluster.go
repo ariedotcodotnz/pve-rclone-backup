@@ -62,11 +62,12 @@ type Members struct {
 	Node    string   // this node
 	Cluster string   // cluster name (empty when standalone)
 	Online  []string // online nodes, sorted (just this node when standalone)
+	All     []string // all nodes, online or not, sorted
 }
 
 // ReadMembers reads .members. A standalone node lists only itself.
 func ReadMembers(pveDir, node string) (Members, error) {
-	m := Members{Node: node, Online: []string{node}}
+	m := Members{Node: node, Online: []string{node}, All: []string{node}}
 	raw, err := os.ReadFile(filepath.Join(pveDir, ".members")) //nolint:gosec // fixed path below the PVE directory
 	if errors.Is(err, fs.ErrNotExist) {
 		return m, nil
@@ -90,13 +91,18 @@ func ReadMembers(pveDir, node string) (Members, error) {
 	if len(doc.NodeList) == 0 {
 		return m, nil
 	}
-	m.Online = nil
+	m.Online, m.All = nil, nil
 	for name, n := range doc.NodeList {
 		if n.Online == 1 || name == node {
 			m.Online = append(m.Online, name)
 		}
+		m.All = append(m.All, name)
+	}
+	if !slices.Contains(m.All, node) {
+		m.All = append(m.All, node)
 	}
 	slices.Sort(m.Online)
+	slices.Sort(m.All)
 	return m, nil
 }
 

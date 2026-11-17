@@ -48,5 +48,6 @@ func (d *Daemon) storageView(ctx context.Context, s apiv1.Storage) apiv1.Storage
 		return s
 	}
 	s.Space = storageSpace(sizes, s.Encryption == "crypt")
+	d.incompleteSpace(ctx, &s)
 	return s
 }

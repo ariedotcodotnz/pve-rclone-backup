@@ -100,9 +100,11 @@ type Daemon struct {
 
 	backupLocksMu sync.Mutex
 	backupLocks   map[string]*backupLock
-	startedAt     time.Time
-	instanceID    string
-	problems      []string
+	// incompleteGrace is incomplete-upload-grace.
+	incompleteGrace config.Interval
+	startedAt       time.Time
+	instanceID      string
+	problems        []string
 }
 
 // NodeName returns the PVE node name, which is the short host name.
@@ -171,12 +173,14 @@ func Run(ctx context.Context, opts Options) error {
 
 	d.api = api.New(api.Options{Logger: d.log, AllowUIDs: opts.AllowUIDs, Idempotency: st})
 	dcfg := d.loadDaemonConfig()
+	d.incompleteGrace = dcfg.IncompleteUploadGrace
 	d.storages = storages.New(storages.Options{
 		Log: d.log, Store: st, Node: opts.Node, PVEDir: opts.PVEDir, Keys: opts.Keys,
 		AboutInterval: dcfg.AboutInterval, ResyncInterval: dcfg.CatalogResyncInterval,
 		OnResync: func(id string, rep *catalog.Report) {
 			d.damagedAlert(context.Background(), id, rep)
 			d.finishDeletions(id, rep)
+			d.recordIncomplete(id, rep)
 		},
 		OnChange: func(id string) {
 			if s, ok := d.storages.Get(id); ok {
@@ -244,7 +248,7 @@ func Run(ctx context.Context, opts Options) error {
 			d.contentResolved(storeID, volname)
 			d.api.Events().Publish("backup.removed", map[string]string{"storage": storeID, "volname": volname})
 			d.spaceFreed(storeID)
-		}},
+		}, InUse: d.uploadInUse, OnPurged: d.purged},
 		Ready: func(id string) error {
 			_, _, err := d.storages.Repo(id)
 			return err
@@ -264,6 +268,7 @@ func Run(ctx context.Context, opts Options) error {
 	d.restoreRoutes()
 	d.verifyRoutes()
 	d.retentionRoutes()
+	d.incompleteRoutes()
 
 	l, err := api.Listen(opts.Socket)
 	if err != nil {

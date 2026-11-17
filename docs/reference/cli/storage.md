@@ -10,11 +10,48 @@ Manage offsite (rclone-backup) storages.
 
 | Command | Description |
 |---|---|
+| [`incomplete`](#storage-incomplete) | List and remove uploads that never finished |
 | [`init`](#storage-init) | Create the repository, export its recovery kit and add the storage to PVE |
 | [`list`](#storage-list) | List offsite storages |
 | [`resync`](#storage-resync) | Rebuild the catalogue from the remote |
 | [`set`](#storage-set) | Change storage properties (through the PVE API) |
 | [`show`](#storage-show) | Show an offsite storage |
+
+## storage incomplete
+
+List and remove uploads that never finished.
+
+An upload that never finishes leaves the segments it uploaded in the cloud, where they take quota
+but are never listed as a backup: for example when the local archive was pruned before the upload
+finished (source_lost), or when a job failed or was cancelled. Each catalogue resync finds them.
+
+They are removed automatically once nothing has changed in them for incomplete-upload-grace
+(7 days by default) and no upload job of this node works on them; those whose local archive is gone
+are removed at the next resync. In a cluster, a node only removes its own jobs' uploads
+automatically. 'purge' removes them now.
+
+## storage incomplete list
+
+List incomplete uploads, as of the last resync.
+
+```
+pve-rclone-backup storage incomplete list <storage>
+```
+
+## storage incomplete purge
+
+Removes the named incomplete uploads, or every one that no upload job of this node works on. In a
+cluster, an upload another node is still working on starts again from the beginning.
+
+```
+pve-rclone-backup storage incomplete purge <storage> [<directory>...] [flags]
+```
+
+**Options**
+
+| Option | Description |
+|---|---|
+| `--dry-run` | only show what would be removed |
 
 ## storage init
 

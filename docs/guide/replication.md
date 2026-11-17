@@ -68,6 +68,12 @@ then newest backup first.
 Fetches and restores also use `transferring` (downloading) and `applying` (placing the archive or
 running the restore).
 
+An upload that ends `source_lost`, `failed` or `cancelled` leaves the segments it uploaded in the
+cloud. They take quota but are never listed; `pve-rclone-backup storage incomplete list` shows them.
+The daemon removes them once their archive is gone, or once they have not changed for
+[`incomplete-upload-grace`](../reference/daemon-settings.md#incomplete-upload-grace), and
+`storage incomplete purge` removes them now. A retried job uploads again what was removed.
+
 ### Retries
 
 | Problem | What happens |

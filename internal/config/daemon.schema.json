@@ -26,6 +26,14 @@
       "type": "string",
       "x-format": "duration"
     },
+    "incomplete-upload-grace": {
+      "default": "7d",
+      "description": "Uploads that never finished are removed from the cloud once what they uploaded has not changed for this long and no upload job of this node works on them; uploads whose local archive is gone are removed at the next resync. In a cluster, only uploads of this node's own jobs are removed. \"off\" never removes them automatically.",
+      "pattern": "^(?:off|0|\\d+[smhdw])$",
+      "title": "Incomplete Upload Grace Period",
+      "type": "string",
+      "x-format": "duration"
+    },
     "log-level": {
       "default": "info",
       "description": "Daemon log level.",
