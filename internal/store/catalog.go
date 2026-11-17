@@ -187,6 +187,11 @@ func putBackup(ctx context.Context, e execer, b *Backup) error {
 		b.SegmentSize, b.SegmentCount, nullString(b.GuestName), nullString(b.Notes), b.Protected, b.MetaDirty,
 		b.DeleteAfter, b.UploadedAt, b.ManifestJSON, b.VerifyLevel, b.VerifiedAt, nullString(b.VerifyResult), b.MetaRev,
 		b.TombstoneAt, nullString(b.TombstoneReason), nullString(b.TombstoneBy))
+	if err != nil {
+		return err
+	}
+	// A committed backup is no longer an incomplete upload.
+	_, err = e.ExecContext(ctx, "DELETE FROM incomplete_uploads WHERE storeid = ? AND remote_dir = ?", b.StoreID, b.RemoteDir)
 	return err
 }
 
@@ -352,18 +357,20 @@ func (s *Store) DeleteBackup(ctx context.Context, storeID, volname string) error
 func (s *Store) ReplaceCatalog(ctx context.Context, storeID string, backups []*Backup) error {
 	s.catalogMu.Lock()
 	defer s.catalogMu.Unlock()
-	return s.replaceCatalog(ctx, storeID, backups, nil)
+	return s.Tx(ctx, func(tx *sql.Tx) error { return replaceCatalog(ctx, tx, storeID, backups, nil) })
 }
 
 // CatalogSync replaces a storage's catalogue with the result of a scan of
 // the remote repository. A scan takes a while, and an entry written in the
 // meantime (a backup committed, deleted or verified, or its meta document
 // pushed) is newer than what the scan saw: the sync records such entries
-// and Replace leaves them as they are.
+// and Replace leaves them as they are. Likewise, an incomplete upload
+// removed meanwhile is not recorded again.
 type CatalogSync struct {
 	s       *Store
 	storeID string
 	changed map[string]bool // volnames written since the sync began
+	gone    map[string]bool // incomplete uploads removed since the sync began
 }
 
 // BeginCatalogSync starts a sync of a storage's catalogue. Begin it before
@@ -371,7 +378,7 @@ type CatalogSync struct {
 func (s *Store) BeginCatalogSync(storeID string) *CatalogSync {
 	s.catalogMu.Lock()
 	defer s.catalogMu.Unlock()
-	c := &CatalogSync{s: s, storeID: storeID, changed: map[string]bool{}}
+	c := &CatalogSync{s: s, storeID: storeID, changed: map[string]bool{}, gone: map[string]bool{}}
 	if s.catalogSyncs == nil {
 		s.catalogSyncs = map[*CatalogSync]struct{}{}
 	}
@@ -388,15 +395,22 @@ func (c *CatalogSync) Close() {
 }
 
 // Replace replaces the storage's catalogue with backups, except for the
-// entries written since the sync began, and ends the sync.
-func (c *CatalogSync) Replace(ctx context.Context, backups []*Backup) error {
+// entries written since the sync began, and its incomplete uploads with
+// incomplete (see ReplaceIncomplete), except for those removed since the
+// sync began, and ends the sync.
+func (c *CatalogSync) Replace(ctx context.Context, backups []*Backup, incomplete []IncompleteUpload) error {
 	c.s.catalogMu.Lock()
 	defer c.s.catalogMu.Unlock()
 	if _, open := c.s.catalogSyncs[c]; !open {
 		return errors.New("store: catalogue sync already ended")
 	}
 	delete(c.s.catalogSyncs, c)
-	return c.s.replaceCatalog(ctx, c.storeID, backups, c.changed)
+	return c.s.Tx(ctx, func(tx *sql.Tx) error {
+		if err := replaceCatalog(ctx, tx, c.storeID, backups, c.changed); err != nil {
+			return err
+		}
+		return replaceIncomplete(ctx, tx, c.storeID, incomplete, c.gone, c.s.unix())
+	})
 }
 
 // writeEntry runs a write of a catalogue entry after recording it in the
@@ -416,48 +430,46 @@ func (s *Store) writeEntry(storeID, volname string, write func() error) error {
 
 // replaceCatalog replaces a storage's catalogue, leaving the entries named
 // in keep as they are. The caller holds catalogMu.
-func (s *Store) replaceCatalog(ctx context.Context, storeID string, backups []*Backup, keep map[string]bool) error {
-	return s.Tx(ctx, func(tx *sql.Tx) error {
-		prev := map[string]*Backup{}
-		rows, err := tx.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE storeid = ?", storeID)
+func replaceCatalog(ctx context.Context, tx *sql.Tx, storeID string, backups []*Backup, keep map[string]bool) error {
+	prev := map[string]*Backup{}
+	rows, err := tx.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE storeid = ?", storeID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		b, err := scanBackup(rows)
 		if err != nil {
+			_ = rows.Close()
 			return err
 		}
-		for rows.Next() {
-			b, err := scanBackup(rows)
-			if err != nil {
-				_ = rows.Close()
-				return err
-			}
-			prev[b.Volname] = b
+		prev[b.Volname] = b
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for volname := range prev {
+		if keep[volname] {
+			continue
 		}
-		if err := rows.Close(); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM backups WHERE storeid = ? AND volname = ?", storeID, volname); err != nil {
 			return err
 		}
-		for volname := range prev {
-			if keep[volname] {
-				continue
-			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM backups WHERE storeid = ? AND volname = ?", storeID, volname); err != nil {
-				return err
-			}
+	}
+	for _, b := range backups {
+		if b.StoreID != storeID {
+			return fmt.Errorf("store: catalogue entry %s belongs to storage %s, not %s", b.Volname, b.StoreID, storeID)
 		}
-		for _, b := range backups {
-			if b.StoreID != storeID {
-				return fmt.Errorf("store: catalogue entry %s belongs to storage %s, not %s", b.Volname, b.StoreID, storeID)
-			}
-			if keep[b.Volname] {
-				continue
-			}
-			if p, ok := prev[b.Volname]; ok {
-				mergeLocal(p, b)
-			}
-			if err := putBackup(ctx, tx, b); err != nil {
-				return fmt.Errorf("store: replace catalogue %s: %w", b.Volname, err)
-			}
+		if keep[b.Volname] {
+			continue
 		}
-		return nil
-	})
+		if p, ok := prev[b.Volname]; ok {
+			mergeLocal(p, b)
+		}
+		if err := putBackup(ctx, tx, b); err != nil {
+			return fmt.Errorf("store: replace catalogue %s: %w", b.Volname, err)
+		}
+	}
+	return nil
 }
 
 // mergeLocal carries over into b, an entry built from the remote, the local

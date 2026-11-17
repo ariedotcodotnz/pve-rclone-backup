@@ -6,7 +6,10 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -134,10 +137,41 @@ func Resync(ctx context.Context, st *store.Store, storeID string, r *repo.Repo, 
 			}
 		}
 	}
-	if err := cs.Replace(ctx, entries); err != nil {
+	if err := cs.Replace(ctx, entries, incompleteUploads(rep.Pending)); err != nil {
 		return nil, err
 	}
 	return rep, nil
+}
+
+// incompleteUploads returns the backup directories without a manifest a
+// scan found: uploads under way or abandoned, and interrupted deletions.
+func incompleteUploads(pending []repo.ScannedBackup) []store.IncompleteUpload {
+	var out []store.IncompleteUpload
+	for _, b := range pending {
+		state := "incomplete"
+		if b.State == repo.StateDeleting {
+			state = "deleting"
+		}
+		u := store.IncompleteUpload{RemoteDir: transport.CryptRoot(b.Generation) + "/" + b.ID.Dir(), State: state,
+			VMType: b.ID.VMType, VMID: b.ID.VMID}
+		if ts, err := time.ParseInLocation("2006_01_02-15_04_05", b.ID.TSLabel, time.Local); err == nil {
+			u.BackupTime = ts.Unix() // as upload jobs record it
+		}
+		var names []string
+		for _, f := range b.Files {
+			if f.Dir {
+				continue
+			}
+			u.Files++
+			u.StoredBytes += f.StoredSize
+			names = append(names, f.Name+" "+strconv.FormatInt(f.StoredSize, 10))
+		}
+		slices.Sort(names)
+		sum := sha256.Sum256([]byte(strings.Join(names, "\n")))
+		u.Fingerprint = hex.EncodeToString(sum[:8])
+		out = append(out, u)
+	}
+	return out
 }
 
 // RemoteID returns the generation and identity of a catalogue entry from

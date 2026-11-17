@@ -295,8 +295,12 @@ func (m *Manager) adoptRow(ctx context.Context, e *entry) error {
 		Source: cfg.Source, ConfigHash: e.binding, Health: apiv1.HealthOpening}); err != nil {
 		return err
 	}
-	// The cached catalogue described another repository or namespace.
-	return m.opts.Store.ReplaceCatalog(ctx, e.id, nil)
+	// The cached catalogue and incomplete uploads described another
+	// repository or namespace.
+	if err := m.opts.Store.ReplaceCatalog(ctx, e.id, nil); err != nil {
+		return err
+	}
+	return m.opts.Store.ReplaceIncomplete(ctx, e.id, nil)
 }
 
 // persist writes an entry's runtime state to its row (if the entry is

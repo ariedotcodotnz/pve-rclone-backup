@@ -425,7 +425,7 @@ func TestCatalogSyncKeepsWritesMadeDuringTheScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := cs.Replace(ctx, scanned); err != nil {
+	if err := cs.Replace(ctx, scanned, nil); err != nil {
 		t.Fatal(err)
 	}
 	list, err := s.ListBackups(ctx, "offsite", BackupFilter{})
@@ -442,13 +442,13 @@ func TestCatalogSyncKeepsWritesMadeDuringTheScan(t *testing.T) {
 	if b, _ := s.GetBackup(ctx, "offsite", "b/pushed"); b.Notes != "new notes" || b.MetaDirty {
 		t.Fatalf("pushed entry reverted to the scan: %+v", b)
 	}
-	if err := cs.Replace(ctx, scanned); err == nil {
+	if err := cs.Replace(ctx, scanned, nil); err == nil {
 		t.Fatal("a sync replaced the catalogue twice")
 	}
 
 	// Writes after the sync ended are not recorded by it.
 	cs2 := s.BeginCatalogSync("offsite")
-	if err := cs2.Replace(ctx, []*Backup{testBackup("b/stale", 102, "s3")}); err != nil {
+	if err := cs2.Replace(ctx, []*Backup{testBackup("b/stale", 102, "s3")}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := s.ListBackups(ctx, "offsite", BackupFilter{}); len(list) != 1 {
@@ -852,11 +852,14 @@ func TestIncompleteUploads(t *testing.T) {
 	up := func(dir, fp string) IncompleteUpload {
 		return IncompleteUpload{RemoteDir: dir, State: "incomplete", VMType: "qemu", VMID: 100, BackupTime: 1, Files: 2, StoredBytes: 10, Fingerprint: fp}
 	}
-	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("a", "1"), up("b", "1"), up("c", "1")}, 100); err != nil {
+	clock := time.Unix(100, 0)
+	s.now = func() time.Time { return clock }
+	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("a", "1"), up("b", "1"), up("c", "1")}); err != nil {
 		t.Fatal(err)
 	}
 	// a is unchanged, b changed, c is gone and d is new.
-	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("a", "1"), up("b", "2"), up("d", "1")}, 200); err != nil {
+	clock = time.Unix(200, 0)
+	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("a", "1"), up("b", "2"), up("d", "1")}); err != nil {
 		t.Fatal(err)
 	}
 	list, err := s.ListIncomplete(ctx, "offsite")
@@ -873,6 +876,46 @@ func TestIncompleteUploads(t *testing.T) {
 	if err := s.DeleteIncomplete(ctx, "offsite", "a"); err != nil {
 		t.Fatal(err)
 	}
+
+	// An upload that was committed is no longer incomplete: once its
+	// backup is catalogued, and in a resync that scanned it before.
+	committed := testBackup("backup/vzdump-qemu-100-2026_10_04-02_00_01.vma.zst", 100, "s1")
+	committed.RemoteDir = "d"
+	if err := s.MergeBackup(ctx, committed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("b", "2"), up("d", "1")}); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := s.ListIncomplete(ctx, "offsite"); err != nil || len(list) != 1 || list[0].RemoteDir != "b" {
+		t.Fatalf("with d committed: %+v, %v", list, err)
+	}
+	if err := s.DeleteBackup(ctx, "offsite", committed.Volname); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceIncomplete(ctx, "offsite", []IncompleteUpload{up("b", "2"), up("d", "1")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MergeBackup(ctx, committed); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := s.ListIncomplete(ctx, "offsite"); err != nil || len(list) != 1 || list[0].RemoteDir != "b" {
+		t.Fatalf("after d was committed: %+v, %v", list, err)
+	}
+
+	// A resync whose scan saw an upload that was removed meanwhile does not
+	// record it again.
+	cs := s.BeginCatalogSync("offsite")
+	if err := s.DeleteIncomplete(ctx, "offsite", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.Replace(ctx, []*Backup{committed}, []IncompleteUpload{up("b", "2"), up("e", "1")}); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := s.ListIncomplete(ctx, "offsite"); err != nil || len(list) != 1 || list[0].RemoteDir != "e" {
+		t.Fatalf("after a resync: %+v, %v", list, err)
+	}
+
 	// Removing the storage forgets its uploads.
 	if err := s.DeleteStorage(ctx, "offsite"); err != nil {
 		t.Fatal(err)

@@ -180,7 +180,7 @@ func Run(ctx context.Context, opts Options) error {
 		OnResync: func(id string, rep *catalog.Report) {
 			d.damagedAlert(context.Background(), id, rep)
 			d.finishDeletions(id, rep)
-			d.recordIncomplete(id, rep)
+			d.cleanIncomplete(id)
 		},
 		Advise: d.retentionAdvice,
 		OnChange: func(id string) {
@@ -249,7 +249,7 @@ func Run(ctx context.Context, opts Options) error {
 			d.contentResolved(storeID, volname)
 			d.api.Events().Publish("backup.removed", map[string]string{"storage": storeID, "volname": volname})
 			d.spaceFreed(storeID)
-		}, InUse: d.uploadInUse, OnPurged: d.purged},
+		}, InUse: d.uploadInUse, OnPurged: func(storeID, _ string) { d.spaceFreed(storeID) }},
 		Ready: func(id string) error {
 			_, _, err := d.storages.Repo(id)
 			return err

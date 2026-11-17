@@ -127,6 +127,8 @@ func (d *Deleter) Run(ctx context.Context, t *jobs.Task) error {
 	if err := d.Store.DeleteBackup(ctx, j.StoreID, j.BackupVolname); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
+	// A resync may have recorded an interrupted deletion as incomplete.
+	d.forget(ctx, j.StoreID, p.RemoteDir)
 	d.Log.Info("offsite backup deleted", "storage", j.StoreID, "backup", strings.TrimPrefix(j.BackupVolname, "backup/"),
 		"reason", p.Reason)
 	if d.OnRemoved != nil {
@@ -148,13 +150,16 @@ func (d *Deleter) purge(ctx context.Context, t *jobs.Task, storeID string, p Del
 	}
 	files, bytes, err := rp.PurgeIncomplete(ctx, gen, id)
 	if errors.Is(err, repo.ErrCommitted) {
-		// The upload finished meanwhile: nothing to remove.
+		// The upload finished meanwhile: nothing to remove, and it is no
+		// longer incomplete.
+		d.forget(ctx, storeID, p.RemoteDir)
 		_ = t.Event(ctx, "info", "not removed: it holds a committed backup now")
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	d.forget(ctx, storeID, p.RemoteDir)
 	d.Log.Info("incomplete upload removed", "storage", storeID, "dir", p.RemoteDir, "files", files, "bytes", bytes,
 		"reason", p.Reason)
 	_ = t.Event(ctx, "info", fmt.Sprintf("removed %d files, %d bytes", files, bytes))
@@ -162,4 +167,12 @@ func (d *Deleter) purge(ctx context.Context, t *jobs.Task, storeID string, p Del
 		d.OnPurged(storeID, p.RemoteDir)
 	}
 	return nil
+}
+
+// forget drops a removed directory from the incomplete uploads a resync
+// recorded.
+func (d *Deleter) forget(ctx context.Context, storeID, remoteDir string) {
+	if err := d.Store.DeleteIncomplete(ctx, storeID, remoteDir); err != nil {
+		d.Log.Warn("forget incomplete upload", "storage", storeID, "dir", remoteDir, "err", err)
+	}
 }

@@ -36,46 +36,71 @@ func scanIncomplete(row scanner) (*IncompleteUpload, error) {
 }
 
 // ReplaceIncomplete records the incomplete uploads a resync of a storage
-// found at now, replacing those recorded before. One seen before keeps
-// when it was first seen and, unless its files changed, when they last
-// changed.
-func (s *Store) ReplaceIncomplete(ctx context.Context, storeID string, list []IncompleteUpload, now int64) error {
-	return s.Tx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, "SELECT "+incompleteColumns+" FROM incomplete_uploads WHERE storeid = ?", storeID)
+// found, replacing those recorded before; a resync records them through
+// CatalogSync.Replace. One seen before keeps when it was first seen and,
+// unless its files changed, when they last changed. A directory that holds
+// a catalogued backup is not an incomplete upload.
+func (s *Store) ReplaceIncomplete(ctx context.Context, storeID string, list []IncompleteUpload) error {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	return s.Tx(ctx, func(tx *sql.Tx) error { return replaceIncomplete(ctx, tx, storeID, list, nil, s.unix()) })
+}
+
+// replaceIncomplete replaces a storage's incomplete uploads, leaving out
+// those named in gone and the directories of catalogued backups.
+func replaceIncomplete(ctx context.Context, tx *sql.Tx, storeID string, list []IncompleteUpload, gone map[string]bool, now int64) error {
+	prev := map[string]*IncompleteUpload{}
+	committed := map[string]bool{}
+	rows, err := tx.QueryContext(ctx, "SELECT "+incompleteColumns+" FROM incomplete_uploads WHERE storeid = ?", storeID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		u, err := scanIncomplete(rows)
 		if err != nil {
+			_ = rows.Close()
 			return err
 		}
-		prev := map[string]*IncompleteUpload{}
-		for rows.Next() {
-			u, err := scanIncomplete(rows)
-			if err != nil {
-				_ = rows.Close()
-				return err
-			}
-			prev[u.RemoteDir] = u
-		}
-		if err := rows.Close(); err != nil {
+		prev[u.RemoteDir] = u
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if rows, err = tx.QueryContext(ctx, "SELECT remote_dir FROM backups WHERE storeid = ?", storeID); err != nil {
+		return err
+	}
+	for rows.Next() {
+		var dir string
+		if err := rows.Scan(&dir); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM incomplete_uploads WHERE storeid = ?", storeID); err != nil {
-			return err
+		committed[dir] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM incomplete_uploads WHERE storeid = ?", storeID); err != nil {
+		return err
+	}
+	for _, u := range list {
+		if gone[u.RemoteDir] || committed[u.RemoteDir] {
+			continue
 		}
-		for _, u := range list {
-			u.StoreID, u.FirstSeenAt, u.ChangedAt = storeID, now, now
-			if p, ok := prev[u.RemoteDir]; ok {
-				u.FirstSeenAt = p.FirstSeenAt
-				if p.Fingerprint == u.Fingerprint {
-					u.ChangedAt = p.ChangedAt
-				}
-			}
-			if _, err := tx.ExecContext(ctx, "INSERT INTO incomplete_uploads ("+incompleteColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-				u.StoreID, u.RemoteDir, u.State, u.VMType, u.VMID, u.BackupTime, u.Files, u.StoredBytes, u.Fingerprint,
-				u.FirstSeenAt, u.ChangedAt); err != nil {
-				return fmt.Errorf("store: record incomplete upload %s: %w", u.RemoteDir, err)
+		u.StoreID, u.FirstSeenAt, u.ChangedAt = storeID, now, now
+		if p, ok := prev[u.RemoteDir]; ok {
+			u.FirstSeenAt = p.FirstSeenAt
+			if p.Fingerprint == u.Fingerprint {
+				u.ChangedAt = p.ChangedAt
 			}
 		}
-		return nil
-	})
+		if _, err := tx.ExecContext(ctx, "INSERT INTO incomplete_uploads ("+incompleteColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			u.StoreID, u.RemoteDir, u.State, u.VMType, u.VMID, u.BackupTime, u.Files, u.StoredBytes, u.Fingerprint,
+			u.FirstSeenAt, u.ChangedAt); err != nil {
+			return fmt.Errorf("store: record incomplete upload %s: %w", u.RemoteDir, err)
+		}
+	}
+	return nil
 }
 
 // ListIncomplete returns a storage's incomplete uploads ordered by guest
@@ -98,8 +123,17 @@ func (s *Store) ListIncomplete(ctx context.Context, storeID string) ([]*Incomple
 	return out, rows.Err()
 }
 
-// DeleteIncomplete forgets an incomplete upload (after it was removed).
+// DeleteIncomplete forgets an incomplete upload or interrupted deletion
+// once its directory was removed. A resync running meanwhile, whose scan
+// may have seen the directory, does not record it again.
 func (s *Store) DeleteIncomplete(ctx context.Context, storeID, remoteDir string) error {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	for c := range s.catalogSyncs {
+		if c.storeID == storeID {
+			c.gone[remoteDir] = true
+		}
+	}
 	_, err := s.db.ExecContext(ctx, "DELETE FROM incomplete_uploads WHERE storeid = ? AND remote_dir = ?", storeID, remoteDir)
 	return err
 }
@@ -111,12 +145,13 @@ type GuestJob struct {
 	VMID       int
 	BackupTime int64
 	State      string
+	ParamsJSON string
 }
 
 // ReplicateJobs returns the guest and state of a storage's replication
 // jobs, newest first.
 func (s *Store) ReplicateJobs(ctx context.Context, storeID string) ([]GuestJob, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, vmtype, vmid, backup_time, state FROM jobs
+	rows, err := s.db.QueryContext(ctx, `SELECT id, vmtype, vmid, backup_time, state, params_json FROM jobs
 		WHERE kind = 'replicate' AND storeid = ? AND vmtype IS NOT NULL ORDER BY id DESC`, storeID)
 	if err != nil {
 		return nil, err
@@ -126,7 +161,7 @@ func (s *Store) ReplicateJobs(ctx context.Context, storeID string) ([]GuestJob, 
 	for rows.Next() {
 		var j GuestJob
 		var vmid, bt sql.NullInt64
-		if err := rows.Scan(&j.ID, &j.VMType, &vmid, &bt, &j.State); err != nil {
+		if err := rows.Scan(&j.ID, &j.VMType, &vmid, &bt, &j.State, &j.ParamsJSON); err != nil {
 			return nil, err
 		}
 		j.VMID, j.BackupTime = int(vmid.Int64), bt.Int64

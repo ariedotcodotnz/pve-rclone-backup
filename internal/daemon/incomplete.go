@@ -4,15 +4,11 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api"
@@ -22,7 +18,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/layout"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/pve/cluster"
-	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/replicate"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/retention"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/textfmt"
@@ -35,45 +31,10 @@ import (
 // the daemon records them, removes them once incomplete-upload-grace has
 // passed, and lets the operator list and purge them.
 
-// incompleteFrom returns the directories without a manifest a resync
-// found.
-func incompleteFrom(rep *catalog.Report) []store.IncompleteUpload {
-	var out []store.IncompleteUpload
-	for _, b := range rep.Pending {
-		state := "incomplete"
-		if b.State == repo.StateDeleting {
-			state = "deleting"
-		}
-		u := store.IncompleteUpload{RemoteDir: fmt.Sprintf("g%d/%s", b.Generation, b.ID.Dir()), State: state,
-			VMType: b.ID.VMType, VMID: b.ID.VMID}
-		if ts, err := time.ParseInLocation("2006_01_02-15_04_05", b.ID.TSLabel, time.Local); err == nil {
-			u.BackupTime = ts.Unix() // like the upload job's
-		}
-		var names []string
-		for _, f := range b.Files {
-			if f.Dir {
-				continue
-			}
-			u.Files++
-			u.StoredBytes += f.StoredSize
-			names = append(names, f.Name+" "+strconv.FormatInt(f.StoredSize, 10))
-		}
-		slices.Sort(names)
-		sum := sha256.Sum256([]byte(strings.Join(names, "\n")))
-		u.Fingerprint = hex.EncodeToString(sum[:8])
-		out = append(out, u)
-	}
-	return out
-}
-
-// recordIncomplete records the incomplete uploads a resync found and
-// removes those whose time has come.
-func (d *Daemon) recordIncomplete(storeID string, rep *catalog.Report) {
+// cleanIncomplete removes a storage's incomplete uploads whose time has
+// come, after a resync recorded them (catalog.Resync).
+func (d *Daemon) cleanIncomplete(storeID string) {
 	ctx := context.Background()
-	if err := d.store.ReplaceIncomplete(ctx, storeID, incompleteFrom(rep), time.Now().Unix()); err != nil {
-		d.log.Warn("record incomplete uploads", "storage", storeID, "err", err)
-		return
-	}
 	cfg, ok := d.storages.Config(storeID)
 	if !ok {
 		return
@@ -113,16 +74,6 @@ func (d *Daemon) incompleteUploads(ctx context.Context, cfg *config.Storage) ([]
 	if err != nil {
 		return nil, err
 	}
-	type guestKey struct {
-		vmtype string
-		vmid   int
-		time   int64
-	}
-	byGuest := map[guestKey][]store.GuestJob{} // newest first
-	for _, j := range jobList {
-		k := guestKey{j.VMType, j.VMID, j.BackupTime}
-		byGuest[k] = append(byGuest[k], j)
-	}
 	// Uploads are removed automatically only from storages that upload
 	// (whose source is this installation's), never from immutable ones.
 	auto := !d.incompleteGrace.Off && len(cfg.ReplicateFrom) > 0 && !cfg.Immutable
@@ -134,14 +85,19 @@ func (d *Daemon) incompleteUploads(ctx context.Context, cfg *config.Storage) ([]
 		v := apiv1.IncompleteUpload{Dir: u.RemoteDir, State: u.State, VMType: u.VMType, VMID: u.VMID, CTime: u.BackupTime,
 			Files: u.Files, Bytes: u.StoredBytes, FirstSeenAt: time.Unix(u.FirstSeenAt, 0).UTC(),
 			UnchangedSince: time.Unix(u.ChangedAt, 0).UTC()}
-		js := byGuest[guestKey{u.VMType, u.VMID, u.BackupTime}]
-		for i, j := range js {
-			if !slices.Contains(finishedJobStates, j.State) {
-				v.Job, v.JobState, v.InUse = j.ID, j.State, true
-				break
-			}
-			if i == 0 {
-				v.Job, v.JobState = j.ID, j.State
+		// An interrupted deletion is no upload; delete jobs finish it.
+		if gen, id, err := catalog.RemoteID(&store.Backup{RemoteDir: u.RemoteDir}); err == nil && u.State == "incomplete" {
+			for _, j := range jobList { // newest first
+				switch {
+				case !sameArchive(j, id, u.BackupTime):
+				case !slices.Contains(finishedJobStates, j.State):
+					v.Job, v.JobState, v.InUse = j.ID, j.State, true
+				case v.Job == 0 && uploadedInto(j, gen, id):
+					v.Job, v.JobState = j.ID, j.State
+				}
+				if v.InUse {
+					break
+				}
 			}
 		}
 		var at time.Time
@@ -173,7 +129,7 @@ func (d *Daemon) standalone() bool {
 }
 
 // uploadInUse reports whether an upload job of this node works on a backup
-// directory (of any collision index).
+// directory.
 func (d *Daemon) uploadInUse(ctx context.Context, storeID string, id layout.BackupID) bool {
 	ts, err := time.ParseInLocation("2006_01_02-15_04_05", id.TSLabel, time.Local)
 	if err != nil {
@@ -184,8 +140,28 @@ func (d *Daemon) uploadInUse(ctx context.Context, storeID string, id layout.Back
 		return true
 	}
 	return slices.ContainsFunc(list, func(j store.GuestJob) bool {
-		return j.VMType == id.VMType && j.VMID == id.VMID && j.BackupTime == ts.Unix() && !slices.Contains(finishedJobStates, j.State)
+		return !slices.Contains(finishedJobStates, j.State) && sameArchive(j, id, ts.Unix())
 	})
+}
+
+// sameArchive reports whether a replication job is of the archive of a
+// backup directory: the same guest and backup time. An unfinished job may
+// upload into a directory of any collision index of its archive, as it may
+// still choose another one, so it protects them all.
+func sameArchive(j store.GuestJob, id layout.BackupID, backupTime int64) bool {
+	return j.VMType == id.VMType && j.VMID == id.VMID && j.BackupTime == backupTime
+}
+
+// uploadedInto reports whether a replication job of a directory's archive
+// uploaded into that very directory: it chose it (its parameters record
+// the generation and collision index once it did). Skipped and superseded
+// jobs never upload.
+func uploadedInto(j store.GuestJob, gen int, id layout.BackupID) bool {
+	if j.State == jobs.StateSkipped || j.State == jobs.StateSuperseded {
+		return false
+	}
+	g, collision, ok := replicate.UploadDir(j.ParamsJSON)
+	return ok && g == gen && collision == id.Collision
 }
 
 // queuePurge queues the removal of an incomplete upload and returns the
@@ -225,14 +201,6 @@ func (d *Daemon) queuePurge(ctx context.Context, storeID string, u incompleteUpl
 		d.deletes.Wake()
 	}
 	return id, nil
-}
-
-// purged forgets an incomplete upload once it was removed.
-func (d *Daemon) purged(storeID, remoteDir string) {
-	if err := d.store.DeleteIncomplete(context.Background(), storeID, remoteDir); err != nil {
-		d.log.Warn("forget removed incomplete upload", "storage", storeID, "dir", remoteDir, "err", err)
-	}
-	d.spaceFreed(storeID)
 }
 
 func (d *Daemon) incompleteRoutes() {
@@ -323,10 +291,15 @@ func (d *Daemon) incompleteSpace(ctx context.Context, s *apiv1.Storage) {
 	}
 	sp := s.Space
 	for _, u := range list {
-		if u.InUse {
+		switch {
+		case u.State == "deleting":
+			// Being deleted, like a tombstoned backup.
+			sp.Tombstoned++
+			sp.TombstonedBytes += u.Bytes
+		case u.InUse:
 			sp.InProgress++
 			sp.InProgressBytes += u.Bytes
-		} else {
+		default:
 			sp.Incomplete++
 			sp.IncompleteBytes += u.Bytes
 		}

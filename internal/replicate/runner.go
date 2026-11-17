@@ -104,6 +104,17 @@ type params struct {
 	GuestError  string       `json:"guest_error,omitempty"`
 }
 
+// UploadDir returns the generation and collision index of the backup
+// directory a replication job chose, from its parameters; ok is false if
+// it has not chosen one yet, so it has uploaded nothing.
+func UploadDir(paramsJSON string) (gen, collision int, ok bool) {
+	var p params
+	if json.Unmarshal([]byte(cmp.Or(paramsJSON, "{}")), &p) != nil || p.Generation == 0 {
+		return 0, 0, false
+	}
+	return p.Generation, p.Collision, true
+}
+
 func loadParams(j *store.Job) params {
 	var p params
 	_ = json.Unmarshal([]byte(cmp.Or(j.ParamsJSON, "{}")), &p)

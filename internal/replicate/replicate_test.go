@@ -272,3 +272,19 @@ func TestChooseSegmentSize(t *testing.T) {
 		t.Errorf("too many segments: %v", err)
 	}
 }
+
+func TestUploadDir(t *testing.T) {
+	for params, want := range map[string][3]any{
+		"":                               {0, 0, false},
+		"{}":                             {0, 0, false}, // not chosen yet
+		`{"segment_size":1073741824}`:    {0, 0, false},
+		`{"generation":1}`:               {1, 0, true},
+		`{"generation":2,"collision":3}`: {2, 3, true},
+		`not json`:                       {0, 0, false},
+	} {
+		gen, collision, ok := UploadDir(params)
+		if [3]any{gen, collision, ok} != want {
+			t.Errorf("UploadDir(%q) = %d, %d, %v", params, gen, collision, ok)
+		}
+	}
+}

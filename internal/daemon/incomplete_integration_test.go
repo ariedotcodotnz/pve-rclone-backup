@@ -17,6 +17,7 @@ import (
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/api/apiv1"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/client"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/jobs"
+	"github.com/ariedotcodotnz/pve-rclone-backup/internal/manifest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/repo/repotest"
 	"github.com/ariedotcodotnz/pve-rclone-backup/internal/store"
@@ -48,9 +49,10 @@ func incompleteSetup(t *testing.T, daemonCfg string) (*repo.Repo, env, map[int]s
 	}
 	later := time.Now().Add(24 * time.Hour).Unix()
 	for vmid, state := range map[int]string{102: jobs.StateSourceLost, 103: jobs.StateRetryWait} {
+		// A job records the directory it chose before it uploads anything.
 		if _, _, err := st.InsertJob(t.Context(), &store.Job{Kind: "replicate", StoreID: "offsite", State: state,
 			DedupeKey: fmt.Sprint("replicate:", vmid), OwnerNode: "pve-test", VMType: "qemu", VMID: vmid, BackupTime: at.Unix(),
-			NextAttemptAt: &later}); err != nil {
+			ParamsJSON: `{"generation":1}`, NextAttemptAt: &later}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -222,5 +224,115 @@ func TestPurgeIncompleteUploads(t *testing.T) {
 	waitGuests(t, r, 100, 103)
 	if j := waitJob(t, c, out[0].PurgeJob); j.State != jobs.StateComplete {
 		t.Fatalf("purge job = %+v", j)
+	}
+}
+
+// TestIncompleteRecordsFollowTheRemote: an interrupted deletion is no
+// longer reported once its delete job finished, and a directory is only
+// attributed to the job that uploaded into it: the same collision index,
+// and never a job that did not upload.
+func TestIncompleteRecordsFollowTheRemote(t *testing.T) {
+	ctx := t.Context()
+	r, _ := repotest.Init(t)
+	at := time.Date(2026, 10, 28, 21, 0, 6, 0, time.Local)
+	repotest.Write(t, r, repotest.Backup{VMID: 100, Time: at, Size: 10 << 10})
+	// An interrupted deletion.
+	crashed := repotest.Backup{VMID: 300, Time: at, Size: 10 << 10}
+	repotest.Write(t, r, crashed)
+	meta := manifest.NewMeta(time.Now())
+	meta.Tombstone = &manifest.Tombstone{RequestedAt: time.Now(), DeleteAfter: time.Now(), Reason: "retention", State: "deleting"}
+	if err := r.WriteMeta(ctx, 1, crashed.ID(), meta); err != nil {
+		t.Fatal(err)
+	}
+	// Uploads left behind in a collision directory of an archive whose
+	// job uploaded into another one, and by a guest whose job was skipped.
+	collided := repotest.Backup{VMID: 104, Time: at, Collision: 1, Size: 150 << 10}
+	repotest.Upload(t, r, collided)
+	repotest.Upload(t, r, repotest.Backup{VMID: 105, Time: at, Size: 150 << 10})
+	// An upload a job waiting to run may still choose to continue.
+	repotest.Upload(t, r, repotest.Backup{VMID: 106, Time: at, Collision: 1, Size: 150 << 10})
+
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	if err := os.MkdirAll(e.stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(ctx, filepath.Join(e.stateDir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for vmid, j := range map[int]store.Job{
+		// It uploaded into collision 0, and its archive is gone.
+		104: {State: jobs.StateSourceLost, ParamsJSON: `{"generation":1}`,
+			BackupVolname: "backup/vzdump-qemu-104-2026_10_28-21_00_06.vma.zst"},
+		105: {State: jobs.StateSkipped},
+		106: {State: jobs.StateQueued, NextAttemptAt: new(time.Now().Add(24 * time.Hour).Unix())},
+	} {
+		j.Kind, j.StoreID, j.DedupeKey, j.OwnerNode = "replicate", "offsite", fmt.Sprint("replicate:", vmid), "pve-test"
+		j.VMType, j.VMID, j.BackupTime = "qemu", vmid, at.Unix()
+		if _, _, err := st.InsertJob(ctx, &j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeStorageCfg(t, e, localSection+strings.TrimSuffix(offsiteSection("offsite", r.Loc.Remote, "homelab"), "\n")+
+		"\trclone-replicate-from local\n\n")
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	waitStorage(t, c, "offsite", resynced)
+
+	// The interrupted deletion is finished and forgotten.
+	waitGuests(t, r, 100, 104, 105, 106)
+	deadline := time.Now().Add(10 * time.Second)
+	for incompleteByGuest(t, c)[300].Dir != "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("finished deletion still listed: %+v", incompleteByGuest(t, c)[300])
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	got := incompleteByGuest(t, c)
+	if u := got[106]; len(got) != 3 || !u.InUse || u.RemoveAfter != nil {
+		t.Fatalf("incomplete uploads = %+v", got)
+	}
+	// Neither job uploaded into these directories: they wait out the grace
+	// period instead of going at once like a lost archive's upload.
+	for _, vmid := range []int{104, 105} {
+		if u := got[vmid]; u.Job != 0 || u.InUse || u.RemoveAfter == nil || u.RemoveAfter.Sub(u.UnchangedSince) != 7*24*time.Hour {
+			t.Fatalf("upload of guest %d = %+v", vmid, u)
+		}
+	}
+	var s apiv1.Storage
+	if err := c.Do(ctx, http.MethodGet, "/v1/storages/offsite", nil, &s); err != nil {
+		t.Fatal(err)
+	}
+	if sp := s.Space; sp.Incomplete != 2 || sp.InProgress != 1 || sp.Tombstoned != 0 || len(s.Warnings) != 1 || !strings.HasPrefix(s.Warnings[0], "2 uploads") {
+		t.Fatalf("space = %+v, warnings %q", s.Space, s.Warnings)
+	}
+}
+
+// TestRebindingForgetsIncompleteUploads: a storage bound to another
+// repository or source no longer shows the old one's incomplete uploads,
+// even before (or without) a resync of the new one.
+func TestRebindingForgetsIncompleteUploads(t *testing.T) {
+	r, _ := repotest.Init(t)
+	repotest.Upload(t, r, repotest.Backup{VMID: 101, Size: 150 << 10})
+	e := newEnv(t)
+	e.keys = repotest.Loader(r.Keys)
+	writeStorageCfg(t, e, localSection+offsiteSection("offsite", r.Loc.Remote, "homelab"))
+	stop := start(t, e)
+	defer func() { _ = stop() }()
+	c := client.New(e.socket)
+	waitStorage(t, c, "offsite", resynced)
+	if got := incompleteByGuest(t, c); len(got) != 1 {
+		t.Fatalf("incomplete uploads = %+v", got)
+	}
+	// No repository there: it is never resynced.
+	writeStorageCfg(t, e, localSection+strings.Replace(offsiteSection("offsite", r.Loc.Remote, "homelab"), "rclone-path pve-backups", "rclone-path elsewhere", 1))
+	s := waitStorage(t, c, "offsite", func(s apiv1.Storage) bool { return s.Health == apiv1.HealthUninitialized })
+	if got := incompleteByGuest(t, c); len(got) != 0 || s.Space == nil || s.Space.Incomplete != 0 {
+		t.Fatalf("after rebinding: incomplete uploads %+v, space %+v", got, s.Space)
 	}
 }
